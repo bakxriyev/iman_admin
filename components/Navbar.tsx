@@ -1,19 +1,19 @@
-"use client";
+"use client"
 
-import { useState } from "react";
-import Link from "next/link";
-import Image from "next/image";
-import { useRouter, usePathname } from "next/navigation";
+import { useState } from "react"
+import Link from "next/link"
+import Image from "next/image"
+import { useRouter, usePathname } from "next/navigation"
 
 export default function AdminNavbar() {
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const router = useRouter();
-  const pathname = usePathname();
+  const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const router = useRouter()
+  const pathname = usePathname()
 
   const handleLogout = () => {
-    localStorage.removeItem("isAuthenticated");
-    router.push("/");
-  };
+    localStorage.removeItem("isAuthenticated")
+    router.push("/")
+  }
 
   return (
     <nav className="bg-gradient-to-r from-purple-800 to-indigo-900 shadow-lg">
@@ -22,32 +22,26 @@ export default function AdminNavbar() {
           <div className="flex items-center">
             <div className="flex-shrink-0">
               <div className="relative h-10 w-10 overflow-hidden rounded-full border-2 border-white">
-                <Image 
-                  src="/logo.jpg" 
-                  alt="Admin Logo" 
-                  width={40} 
-                  height={40}
-                  className="object-cover"
-                />
+                <Image src="/logo.jpg" alt="Admin Logo" width={40} height={40} className="object-cover" />
               </div>
             </div>
             <div className="hidden md:block">
               <div className="ml-10 flex items-baseline space-x-4">
-                <Link 
-                  href="/admin/dashboard" 
+                <Link
+                  href="/admin/dashboard"
                   className={`px-3 py-2 rounded-md text-sm font-medium ${
-                    pathname === "/dashboard" 
-                      ? "bg-indigo-700 text-white" 
+                    pathname === "/dashboard"
+                      ? "bg-indigo-700 text-white"
                       : "text-gray-300 hover:bg-indigo-600 hover:text-white"
                   } transition-all duration-200`}
                 >
                   📊 Dashboard
                 </Link>
-                <Link 
-                  href="/admin/statistics" 
+                <Link
+                  href="/admin/statistics"
                   className={`px-3 py-2 rounded-md text-sm font-medium ${
-                    pathname === "/statistics" 
-                      ? "bg-indigo-700 text-white" 
+                    pathname === "/statistics"
+                      ? "bg-indigo-700 text-white"
                       : "text-gray-300 hover:bg-indigo-600 hover:text-white"
                   } transition-all duration-200`}
                 >
@@ -63,7 +57,11 @@ export default function AdminNavbar() {
             >
               <span>Chiqish</span>
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M3 3a1 1 0 00-1 1v12a1 1 0 001 1h12a1 1 0 001-1V4a1 1 0 00-1-1H3zm11 4a1 1 0 10-2 0v4a1 1 0 102 0V7z" clipRule="evenodd" />
+                <path
+                  fillRule="evenodd"
+                  d="M3 3a1 1 0 00-1 1v12a1 1 0 001 1h12a1 1 0 001-1V4a1 1 0 00-1-1H3zm11 4a1 1 0 10-2 0v4a1 1 0 102 0V7z"
+                  clipRule="evenodd"
+                />
                 <path d="M8.293 7.293a1 1 0 011.414 0L11 8.586V5a1 1 0 112 0v3.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" />
               </svg>
             </button>
@@ -75,11 +73,25 @@ export default function AdminNavbar() {
             >
               <span className="sr-only">Open main menu</span>
               {!isMenuOpen ? (
-                <svg className="block h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <svg
+                  className="block h-6 w-6"
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  aria-hidden="true"
+                >
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
                 </svg>
               ) : (
-                <svg className="block h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <svg
+                  className="block h-6 w-6"
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  aria-hidden="true"
+                >
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               )}
@@ -92,21 +104,21 @@ export default function AdminNavbar() {
       {isMenuOpen && (
         <div className="md:hidden">
           <div className="px-2 pt-2 pb-3 space-y-1 sm:px-3">
-            <Link 
-              href="/dashboard" 
+            <Link
+              href="/admin/dashboard"
               className={`block px-3 py-2 rounded-md text-base font-medium ${
-                pathname === "/dashboard" 
-                  ? "bg-indigo-700 text-white" 
+                pathname === "/dashboard"
+                  ? "bg-indigo-700 text-white"
                   : "text-gray-300 hover:bg-indigo-600 hover:text-white"
               }`}
             >
               📊 Dashboard
             </Link>
-            <Link 
-              href="/statistics" 
+            <Link
+              href="/admin/statistics"
               className={`block px-3 py-2 rounded-md text-base font-medium ${
-                pathname === "/statistics" 
-                  ? "bg-indigo-700 text-white" 
+                pathname === "/statistics"
+                  ? "bg-indigo-700 text-white"
                   : "text-gray-300 hover:bg-indigo-600 hover:text-white"
               }`}
             >
@@ -122,5 +134,5 @@ export default function AdminNavbar() {
         </div>
       )}
     </nav>
-  );
+  )
 }
