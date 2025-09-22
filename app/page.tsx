@@ -40,9 +40,9 @@ export default function Login() {
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-xl shadow-2xl overflow-hidden">
         <div className="bg-gradient-to-r from-purple-600 to-indigo-700 px-6 py-8 text-white text-center">
-          <div className="flex justify-center mb-4">
-            <div className="relative h-24 w-24 overflow-hidden rounded-full border-4 border-white shadow-lg">
-              <Image src="/logo.jpg" alt="Admin Logo" width={96} height={96} className="object-cover" />
+          <div className="flex-shrink-0">
+            <div className="relative h-10 w-10 overflow-hidden rounded-full border-2 border-white">
+              <Image src="/madinaaa.png" alt="Admin Logo" width={40} height={40} className="object-cover" />
             </div>
           </div>
           <h1 className="text-2xl font-bold">Admin Panel</h1>

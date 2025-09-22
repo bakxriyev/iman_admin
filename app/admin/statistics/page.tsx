@@ -4,23 +4,6 @@ import { useState, useEffect } from "react"
 import axios from "axios"
 import { useRouter } from "next/navigation"
 import AdminNavbar from "@/components/Navbar"
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  CartesianGrid,
-  Legend,
-  AreaChart,
-  Area,
-  PieChart,
-  Pie,
-  Cell,
-} from "recharts"
 
 interface User {
   id: number | string
@@ -30,17 +13,20 @@ interface User {
   tg_user: string
 }
 
+interface DailyRegistration {
+  date: string
+  count: number
+  fullDate: string
+}
+
 export default function Statistics() {
   const [users, setUsers] = useState<User[]>([])
-  const [hourlyStats, setHourlyStats] = useState<{ hour: string; count: number }[]>([])
-  const [dailyStats, setDailyStats] = useState<{ date: string; count: number }[]>([])
-  const [weeklyStats, setWeeklyStats] = useState<{ week: string; count: number }[]>([])
-  const [monthlyStats, setMonthlyStats] = useState<{ month: string; count: number }[]>([])
+  const [dailyRegistrations, setDailyRegistrations] = useState<DailyRegistration[]>([])
+  const [currentPage, setCurrentPage] = useState(1)
+  const [itemsPerPage, setItemsPerPage] = useState(10)
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string>("")
   const router = useRouter()
-
-  const COLORS = ["#3B82F6", "#8B5CF6", "#10B981", "#F59E0B", "#EF4444", "#06B6D4", "#84CC16", "#F97316"]
 
   // Check authentication
   useEffect(() => {
@@ -49,17 +35,28 @@ export default function Statistics() {
     }
   }, [router])
 
-  // Fetch users
   useEffect(() => {
     const fetchUsers = async () => {
       try {
         setLoading(true)
         setError("")
-        const res = await axios.get<User[]>(`https://orqa.imanakhmedovna.uz/users`)
+
+        const controller = new AbortController()
+    
+        const res = await axios.get<User[]>(`https://backend.madinafayzullayevna.uz/users`, {
+          signal: controller.signal,
+          timeout: 5000,
+        })
+
         setUsers(res.data)
-      } catch (err) {
+        calculateDailyRegistrations(res.data)
+      } catch (err: any) {
         console.error("Foydalanuvchilarni yuklashda xatolik:", err)
-        setError("Statistika ma'lumotlarini yuklashda xatolik yuz berdi")
+        if (err.name === "AbortError") {
+          setError("So'rov vaqti tugadi. Iltimos, qayta urinib ko'ring.")
+        } else {
+          setError("Statistika ma'lumotlarini yuklashda xatolik yuz berdi")
+        }
       } finally {
         setLoading(false)
       }
@@ -68,137 +65,90 @@ export default function Statistics() {
     fetchUsers()
   }, [])
 
-  // Calculate statistics
-  useEffect(() => {
-    if (users.length > 0) {
-      calculateStats()
-    }
-  }, [users])
+  const calculateDailyRegistrations = (userData: User[]) => {
+    const daily: Record<string, { count: number; fullDate: string }> = {}
 
-  const calculateStats = () => {
-    const hourly: Record<string, number> = {}
-    const daily: Record<string, number> = {}
-    const weekly: Record<string, number> = {}
-    const monthly: Record<string, number> = {}
-
-    users.forEach((user) => {
+    userData.forEach((user) => {
       const dateObj = new Date(user.createdAt)
       if (isNaN(dateObj.getTime())) return
 
-      // Hourly stats
-      const hour = dateObj.getHours().toString().padStart(2, "0")
-      const hourKey = `${hour}:00`
-      hourly[hourKey] = (hourly[hourKey] || 0) + 1
-
-      // Daily stats
       const day = dateObj.getDate().toString().padStart(2, "0")
       const month = (dateObj.getMonth() + 1).toString().padStart(2, "0")
-      const dayKey = `${day}.${month}`
-      daily[dayKey] = (daily[dayKey] || 0) + 1
+      const year = dateObj.getFullYear()
+      const dayKey = `${day}.${month}.${year}`
 
-      // Weekly stats
-      const oneJan = new Date(dateObj.getFullYear(), 0, 1)
-      const daysPassed = Math.floor((dateObj.getTime() - oneJan.getTime()) / 86400000)
-      const weekNumber = Math.ceil((daysPassed + oneJan.getDay() + 1) / 7)
-      const weekKey = `${weekNumber}-hafta`
-      weekly[weekKey] = (weekly[weekKey] || 0) + 1
-
-      // Monthly stats
-      const monthNames = [
-        "Yanvar",
-        "Fevral",
-        "Mart",
-        "Aprel",
-        "May",
-        "Iyun",
-        "Iyul",
-        "Avgust",
-        "Sentabr",
-        "Oktabr",
-        "Noyabr",
-        "Dekabr",
-      ]
-      const monthKey = monthNames[dateObj.getMonth()]
-      monthly[monthKey] = (monthly[monthKey] || 0) + 1
+      if (!daily[dayKey]) {
+        daily[dayKey] = { count: 0, fullDate: dayKey }
+      }
+      daily[dayKey].count += 1
     })
 
-    // Convert to arrays and sort
-    const hourlyArr = Object.keys(hourly)
-      .map((key) => ({ hour: key, count: hourly[key] }))
-      .sort((a, b) => Number.parseInt(a.hour) - Number.parseInt(b.hour))
-
+    // Convert to array and sort by date (newest first)
     const dailyArr = Object.keys(daily)
-      .map((key) => ({ date: key, count: daily[key] }))
+      .map((key) => ({
+        date: key,
+        count: daily[key].count,
+        fullDate: daily[key].fullDate,
+      }))
       .sort((a, b) => {
-        const [aDay, aMonth] = a.date.split(".")
-        const [bDay, bMonth] = b.date.split(".")
-        return aMonth === bMonth
-          ? Number.parseInt(aDay) - Number.parseInt(bDay)
-          : Number.parseInt(aMonth) - Number.parseInt(bMonth)
+        const dateA = new Date(a.date.split(".").reverse().join("-"))
+        const dateB = new Date(b.date.split(".").reverse().join("-"))
+        return dateB.getTime() - dateA.getTime()
       })
 
-    const weeklyArr = Object.keys(weekly)
-      .map((key) => ({ week: key, count: weekly[key] }))
-      .sort((a, b) => Number.parseInt(a.week) - Number.parseInt(b.week))
-
-    const monthlyArr = Object.keys(monthly).map((key) => ({ month: key, count: monthly[key] }))
-
-    setHourlyStats(hourlyArr)
-    setDailyStats(dailyArr)
-    setWeeklyStats(weeklyArr)
-    setMonthlyStats(monthlyArr)
+    setDailyRegistrations(dailyArr)
   }
 
-  // Calculate platform stats (enhanced with more realistic data)
-  const calculatePlatformStats = () => {
-    const platforms: Record<string, number> = {
-      Telegram: 0,
-      WhatsApp: 0,
-      Instagram: 0,
-      Boshqa: 0,
-    }
+  const paginatedData = dailyRegistrations.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
 
-    users.forEach((user) => {
-      if (user.tg_user && user.tg_user !== "Kiritilmagan") {
-        platforms["Telegram"]++
-      } else {
-        const rand = Math.random()
-        if (rand < 0.4) platforms["WhatsApp"]++
-        else if (rand < 0.7) platforms["Instagram"]++
-        else platforms["Boshqa"]++
+  const totalPages = Math.ceil(dailyRegistrations.length / itemsPerPage)
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page)
+    window.scrollTo({ top: 0, behavior: "smooth" })
+  }
+
+  const renderPagination = () => {
+    const pages = []
+    const maxVisiblePages = 10
+
+    if (totalPages <= maxVisiblePages) {
+      for (let i = 1; i <= totalPages; i++) {
+        pages.push(i)
       }
-    })
-
-    return Object.keys(platforms)
-      .filter((key) => platforms[key] > 0)
-      .map((key) => ({
-        name: key,
-        value: platforms[key],
-      }))
-  }
-
-  const platformData = calculatePlatformStats()
-
-  // Custom tooltip for charts
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="bg-white p-4 border border-gray-200 shadow-xl rounded-lg">
-          <p className="font-semibold text-gray-800">{`${label}`}</p>
-          <p className="text-blue-600 font-bold text-lg">{`${payload[0].value} foydalanuvchi`}</p>
-        </div>
-      )
+    } else {
+      if (currentPage <= 6) {
+        for (let i = 1; i <= 8; i++) {
+          pages.push(i)
+        }
+        pages.push("...")
+        pages.push(totalPages)
+      } else if (currentPage >= totalPages - 5) {
+        pages.push(1)
+        pages.push("...")
+        for (let i = totalPages - 7; i <= totalPages; i++) {
+          pages.push(i)
+        }
+      } else {
+        pages.push(1)
+        pages.push("...")
+        for (let i = currentPage - 3; i <= currentPage + 3; i++) {
+          pages.push(i)
+        }
+        pages.push("...")
+        pages.push(totalPages)
+      }
     }
-    return null
+
+    return pages
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 w-full">
       <AdminNavbar />
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100">
-          {/* Enhanced Header */}
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+        <div className="bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100 w-full">
           <div className="bg-gradient-to-r from-blue-600 via-purple-600 to-indigo-700 px-6 py-8 text-white">
             <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
               <div>
@@ -209,12 +159,17 @@ export default function Statistics() {
                     </svg>
                   </span>
                   Statistika Dashboard
+                  {loading && (
+                    <div className="ml-3">
+                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                    </div>
+                  )}
                 </h1>
-                <p className="text-blue-100 text-lg">Iman Akhmedovna vebinar tahlili va hisobotlar</p>
+                <p className="text-blue-100 text-lg">Kunlik ro'yxatdan o'tishlar statistikasi</p>
               </div>
 
               <div className="bg-white/20 backdrop-blur-sm rounded-xl p-4 flex items-center gap-3 min-w-[200px]">
-                <div className="bg-blue-500 p-3 rounded-lg shadow-md">
+                <div className="bg-green-500 p-3 rounded-lg shadow-md">
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
                     className="h-6 w-6"
@@ -231,14 +186,47 @@ export default function Statistics() {
                   </svg>
                 </div>
                 <div>
-                  <p className="text-sm text-blue-100 font-medium">Jami foydalanuvchilar</p>
-                  <p className="text-3xl font-bold">{users.length.toLocaleString()}</p>
+                  <p className="text-sm text-blue-100 font-medium">Jami kunlar</p>
+                  <p className="text-3xl font-bold">{dailyRegistrations.length}</p>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Charts */}
+          <div className="p-6 border-b bg-gray-50">
+            <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
+              <h2 className="text-xl font-semibold text-gray-800">Kunlar bo'yicha ro'yxatdan o'tishlar</h2>
+
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium text-gray-700">Sahifada:</label>
+                  <select
+                    value={itemsPerPage}
+                    onChange={(e) => {
+                      setItemsPerPage(Number(e.target.value))
+                      setCurrentPage(1)
+                    }}
+                    className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                  >
+                    <option value={10}>10</option>
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-4 text-sm text-gray-600">
+                  <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full font-medium">
+                    Sahifa: {currentPage} / {totalPages}
+                  </span>
+                  <span className="bg-gray-100 text-gray-800 px-3 py-1 rounded-full font-medium">
+                    Jami: {dailyRegistrations.length} kun
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {loading ? (
             <div className="flex justify-center items-center h-64">
               <div className="relative">
@@ -271,176 +259,135 @@ export default function Statistics() {
                     <p className="text-sm font-medium">{error}</p>
                   </div>
                 </div>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="mt-4 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                >
+                  Qayta yuklash
+                </button>
               </div>
             </div>
           ) : (
-            <div className="p-8">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-                {/* Hourly registrations */}
-                <div className="bg-gradient-to-br from-blue-50 to-indigo-100 p-6 rounded-2xl shadow-lg border border-blue-200">
-                  <h2 className="text-xl font-bold mb-6 text-gray-800 flex items-center gap-3">
-                    <div className="bg-blue-500 p-2 rounded-lg">
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="h-6 w-6 text-white"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                        />
-                      </svg>
-                    </div>
-                    Soatlar bo'yicha ro'yxatdan o'tishlar
-                  </h2>
-                  <div className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={hourlyStats} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e0e7ff" />
-                        <XAxis dataKey="hour" stroke="#3b82f6" fontSize={12} />
-                        <YAxis stroke="#3b82f6" fontSize={12} />
-                        <Tooltip content={<CustomTooltip />} />
-                        <Bar dataKey="count" name="Foydalanuvchilar soni" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
+            <>
+              <div className="overflow-x-auto" style={{ scrollBehavior: "smooth" }}>
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">
+                        #
+                      </th>
+                      <th className="px-6 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">
+                        Sana
+                      </th>
+                      <th className="px-6 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">
+                        Ro'yxatdan o'tganlar soni
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {paginatedData.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="px-6 py-12 text-center text-gray-500">
+                          <div className="flex flex-col items-center">
+                            <svg
+                              className="h-12 w-12 text-gray-400 mb-4"
+                              xmlns="http://www.w3.org/2000/svg"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
+                              />
+                            </svg>
+                            <p className="text-lg font-medium">Ma'lumotlar topilmadi</p>
+                            <p className="text-sm text-gray-400">
+                              Hozircha ro'yxatdan o'tishlar statistikasi mavjud emas
+                            </p>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedData.map((item, index) => {
+                        const globalIndex = (currentPage - 1) * itemsPerPage + index + 1
 
-                {/* Daily registrations */}
-                <div className="bg-gradient-to-br from-purple-50 to-pink-100 p-6 rounded-2xl shadow-lg border border-purple-200">
-                  <h2 className="text-xl font-bold mb-6 text-gray-800 flex items-center gap-3">
-                    <div className="bg-purple-500 p-2 rounded-lg">
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="h-6 w-6 text-white"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-                        />
-                      </svg>
-                    </div>
-                    Kunlar bo'yicha ro'yxatdan o'tishlar
-                  </h2>
-                  <div className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={dailyStats} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#f3e8ff" />
-                        <XAxis dataKey="date" stroke="#8b5cf6" fontSize={12} />
-                        <YAxis stroke="#8b5cf6" fontSize={12} />
-                        <Tooltip content={<CustomTooltip />} />
-                        <Line
-                          type="monotone"
-                          dataKey="count"
-                          name="Foydalanuvchilar soni"
-                          stroke="#8b5cf6"
-                          strokeWidth={3}
-                          dot={{ r: 6, fill: "#8b5cf6" }}
-                          activeDot={{ r: 8, fill: "#7c3aed" }}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
+                        return (
+                          <tr key={item.date} className="hover:bg-blue-50 transition-colors duration-200">
+                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                              {globalIndex}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm font-semibold text-gray-900">{item.fullDate}</div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="flex items-center">
+                                <span className="text-lg font-bold text-blue-600">{item.count}</span>
+                                <span className="ml-2 text-sm text-gray-500">foydalanuvchi</span>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })
+                    )}
+                  </tbody>
+                </table>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                {/* Weekly registrations */}
-                <div className="bg-gradient-to-br from-green-50 to-emerald-100 p-6 rounded-2xl shadow-lg border border-green-200">
-                  <h2 className="text-xl font-bold mb-6 text-gray-800 flex items-center gap-3">
-                    <div className="bg-green-500 p-2 rounded-lg">
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="h-6 w-6 text-white"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-                        />
-                      </svg>
+              {totalPages > 1 && (
+                <div className="bg-gray-50 px-6 py-4 border-t border-gray-200">
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div className="text-sm text-gray-700">
+                      <span className="font-medium">{(currentPage - 1) * itemsPerPage + 1}</span>
+                      {" - "}
+                      <span className="font-medium">
+                        {Math.min(currentPage * itemsPerPage, dailyRegistrations.length)}
+                      </span>
+                      {" dan "}
+                      <span className="font-medium">{dailyRegistrations.length}</span>
+                      {" ta natija"}
                     </div>
-                    Haftalar bo'yicha ro'yxatdan o'tishlar
-                  </h2>
-                  <div className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={weeklyStats} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#ecfdf5" />
-                        <XAxis dataKey="week" stroke="#10b981" fontSize={12} />
-                        <YAxis stroke="#10b981" fontSize={12} />
-                        <Tooltip content={<CustomTooltip />} />
-                        <Area
-                          type="monotone"
-                          dataKey="count"
-                          name="Foydalanuvchilar soni"
-                          stroke="#10b981"
-                          fill="#10b981"
-                          fillOpacity={0.3}
-                        />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
 
-                {/* Platform distribution */}
-                <div className="bg-gradient-to-br from-orange-50 to-yellow-100 p-6 rounded-2xl shadow-lg border border-orange-200">
-                  <h2 className="text-xl font-bold mb-6 text-gray-800 flex items-center gap-3">
-                    <div className="bg-orange-500 p-2 rounded-lg">
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="h-6 w-6 text-white"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
+                    <div className="flex items-center space-x-1">
+                      <button
+                        onClick={() => handlePageChange(currentPage - 1)}
+                        disabled={currentPage === 1}
+                        className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                        />
-                      </svg>
-                    </div>
-                    Platformalar bo'yicha taqsimot
-                  </h2>
-                  <div className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={platformData}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          outerRadius={100}
-                          fill="#8884d8"
-                          dataKey="value"
-                          label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                        ← Oldingi
+                      </button>
+
+                      {renderPagination().map((page, index) => (
+                        <button
+                          key={index}
+                          onClick={() => (typeof page === "number" ? handlePageChange(page) : null)}
+                          disabled={page === "..."}
+                          className={`px-3 py-2 text-sm font-medium rounded-md transition-all ${
+                            page === currentPage
+                              ? "bg-blue-600 text-white shadow-md"
+                              : page === "..."
+                                ? "text-gray-400 cursor-default"
+                                : "text-gray-700 bg-white border border-gray-300 hover:bg-gray-50"
+                          }`}
                         >
-                          {platformData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip />
-                        <Legend />
-                      </PieChart>
-                    </ResponsiveContainer>
+                          {page}
+                        </button>
+                      ))}
+
+                      <button
+                        onClick={() => handlePageChange(currentPage + 1)}
+                        disabled={currentPage === totalPages}
+                        className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                      >
+                        Keyingi →
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
+              )}
+            </>
           )}
         </div>
       </div>
