@@ -26,7 +26,7 @@ export default function AdminNavbar() {
           <div className="flex items-center">
             <div className="flex-shrink-0">
               <div className="relative h-10 w-10 overflow-hidden rounded-full border-2 border-white">
-                <Image src="/madinaaa.png" alt="Admin Logo" width={40} height={40} className="object-cover" />
+                <Image src="/logo.jpg" alt="Admin Logo" width={40} height={40} className="object-cover" />
               </div>
             </div>
             <div className="hidden md:block">

@@ -42,7 +42,7 @@ export default function Login() {
         <div className="bg-gradient-to-r from-purple-600 to-indigo-700 px-6 py-8 text-white text-center">
           <div className="flex-shrink-0">
             <div className="relative h-10 w-10 overflow-hidden rounded-full border-2 border-white">
-              <Image src="/madinaaa.png" alt="Admin Logo" width={40} height={40} className="object-cover" />
+              <Image src="/logo.jpg" alt="Admin Logo" width={40} height={40} className="object-cover" />
             </div>
           </div>
           <h1 className="text-2xl font-bold">Admin Panel</h1>

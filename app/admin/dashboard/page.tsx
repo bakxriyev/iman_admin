@@ -89,7 +89,7 @@ export default function Dashboard() {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 8000)
 
-      const res = await axios.get(`https://backend.madinafayzullayevna.uz/users?${params}`, {
+      const res = await axios.get(`https://backend.imanakhmedovna.uz/user?${params}`, {
         signal: controller.signal,
         timeout: 8000,
       })
@@ -224,7 +224,7 @@ export default function Dashboard() {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 30000) // 30 second timeout for export
 
-      const res = await axios.get(`https://backend.madinafayzullayevna.uz/users`, {
+      const res = await axios.get(`https://backend.imanakhmedovna.uz/user`, {
         signal: controller.signal,
         timeout: 30000,
       })
@@ -332,7 +332,7 @@ export default function Dashboard() {
                   Admin Dashboard
                 </h1>
                 <p className="text-blue-100 text-sm sm:text-lg">
-                  Madina Fayzullayevna vebinar foydalanuvchilari boshqaruvi
+                 Iman Akhmedovna | Admin Panel
                 </p>
               </div>
 
