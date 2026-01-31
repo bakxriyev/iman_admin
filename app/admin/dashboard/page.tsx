@@ -229,7 +229,7 @@ export default function Dashboard() {
       let exportData = await fetchAllUsersForExport()
 
       // Prepare data for Excel
-      const excelData = exportData.map((user, index) => ({
+      const excelData = exportData.map((user:any, index:any) => ({
         "№": index + 1,
         "To'liq ismi": user.full_name || "Kiritilmagan",
         "Telefon raqami": user.phone_number || "Kiritilmagan",
