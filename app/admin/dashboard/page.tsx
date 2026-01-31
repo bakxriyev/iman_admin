@@ -1,8 +1,7 @@
 "use client"
 
 import type React from "react"
-
-import { useEffect, useState, useCallback, useMemo } from "react"
+import { useEffect, useState, useCallback, useRef, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import axios from "axios"
 import AdminNavbar from "@/components/Navbar"
@@ -30,16 +29,22 @@ interface CourseStats {
   todayRegistrations: number
 }
 
+// Cache system for users data
+interface CacheData {
+  users: User[]
+  timestamp: number
+  courseFilter: string
+}
+
 export default function Dashboard() {
   const [users, setUsers] = useState<User[]>([])
-  const [allUsers, setAllUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [exportLoading, setExportLoading] = useState(false)
   const [error, setError] = useState("")
   const [searchTerm, setSearchTerm] = useState("")
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(10)
-  const [courseFilter, setCourseFilter] = useState<string>("all") // "all", "a", "b"
+  const [courseFilter, setCourseFilter] = useState<string>("all")
   const [pagination, setPagination] = useState<PaginationInfo>({
     currentPage: 1,
     totalPages: 1,
@@ -55,15 +60,20 @@ export default function Dashboard() {
     huzur: { totalUsers: 0, todayRegistrations: 0 },
     uygonish: { totalUsers: 0, todayRegistrations: 0 },
   })
+
+  // Refs for caching
+  const cacheRef = useRef<Map<string, CacheData>>(new Map())
+  const statsCacheRef = useRef<{ data: any; timestamp: number } | null>(null)
+  const lastRequestRef = useRef<{ url: string; timestamp: number } | null>(null)
   
   const router = useRouter()
 
   // Kurs nomlari
-  const COURSE_NAMES = {
+  const COURSE_NAMES = useMemo(() => ({
     all: "Barcha kurslar",
     a: "Huzur kursi",
     b: "Uyg'onish kursi",
-  }
+  }), [])
 
   // Check authentication
   useEffect(() => {
@@ -72,14 +82,39 @@ export default function Dashboard() {
     }
   }, [router])
 
+  // Cache duration - 5 minutes
+  const CACHE_DURATION = 5 * 60 * 1000
+
+  // Check if cache is valid
+  const isCacheValid = (timestamp: number): boolean => {
+    return Date.now() - timestamp < CACHE_DURATION
+  }
+
+  // Get cache key for current state
+  const getCacheKey = (page: number, search: string, filter: string): string => {
+    return `${page}-${search}-${filter}-${itemsPerPage}`
+  }
+
+  // Optimized debounce function
+  const useDebounce = (callback: Function, delay: number) => {
+    const timeoutRef = useRef<NodeJS.Timeout | null>(null)
+
+    return useCallback((...args: any[]) => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current)
+      }
+      
+      timeoutRef.current = setTimeout(() => {
+        callback(...args)
+      }, delay)
+    }, [callback, delay])
+  }
+
   // Debounced search function
-  const debouncedSearch = useCallback(
-    debounce((term: string) => {
-      setCurrentPage(1)
-      fetchUsers(1, term)
-    }, 300),
-    [],
-  )
+  const debouncedSearch = useDebounce((term: string) => {
+    setCurrentPage(1)
+    fetchUsers(1, term)
+  }, 500)
 
   // Handle search input change
   useEffect(() => {
@@ -88,17 +123,33 @@ export default function Dashboard() {
     } else {
       fetchUsers(currentPage)
     }
-  }, [searchTerm, debouncedSearch])
+  }, [searchTerm])
 
-  // Handle course filter or items per page change
-  useEffect(() => {
-    setCurrentPage(1)
-    fetchUsers(1, searchTerm)
-    fetchCourseStats()
-  }, [itemsPerPage, courseFilter])
+  // Optimized fetch users function with caching
+  const fetchUsers = useCallback(async (page = 1, search = "") => {
+    const cacheKey = getCacheKey(page, search, courseFilter)
+    
+    // Check cache first
+    if (cacheRef.current.has(cacheKey)) {
+      const cachedData = cacheRef.current.get(cacheKey)!
+      if (isCacheValid(cachedData.timestamp)) {
+        setUsers(cachedData.users)
+        
+        const totalUsers = cachedData.users.length
+        const totalPages = Math.ceil(totalUsers / itemsPerPage)
+        
+        setPagination({
+          currentPage: page,
+          totalPages: totalPages,
+          totalUsers: totalUsers,
+          usersPerPage: itemsPerPage,
+        })
+        
+        setLoading(false)
+        return
+      }
+    }
 
-  // Fetch users with course filter - FIXED VERSION
-  const fetchUsers = async (page = 1, search = "") => {
     try {
       setLoading(true)
       setError("")
@@ -117,119 +168,202 @@ export default function Dashboard() {
         params.append("address", courseFilter)
       }
 
-      console.log("[v2] Fetching users with params:", params.toString())
+      // Prevent duplicate requests
+      const requestUrl = `https://b.imanakhmedovna.uz/users?${params}`
+      if (lastRequestRef.current?.url === requestUrl && 
+          Date.now() - lastRequestRef.current.timestamp < 2000) {
+        return
+      }
+
+      lastRequestRef.current = {
+        url: requestUrl,
+        timestamp: Date.now()
+      }
 
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 8000)
+      const timeoutId = setTimeout(() => controller.abort(), 5000)
 
-      const res = await axios.get(`https://b.imanakhmedovna.uz/users?${params}`, {
+      const res = await axios.get(requestUrl, {
         signal: controller.signal,
-        timeout: 8000,
+        timeout: 5000,
       })
 
       clearTimeout(timeoutId)
 
-      console.log("[v2] API Response:", {
-        dataLength: res.data?.length,
-        data: res.data,
-        headers: res.headers,
-        totalCount: res.headers["x-total-count"],
-      })
-
-      if (res.data && Array.isArray(res.data)) {
-        // Filter users by address if needed (double check)
-        let filteredData = res.data;
-        if (courseFilter !== "all") {
-          filteredData = res.data.filter(user => user.address === courseFilter);
+      if (res.data) {
+        // Handle both array and paginated response formats
+        let userData: User[] = []
+        let totalCount = 0
+        
+        if (Array.isArray(res.data)) {
+          userData = res.data
+          totalCount = userData.length
+        } else if (res.data.users && Array.isArray(res.data.users)) {
+          userData = res.data.users
+          totalCount = res.data.total || userData.length
+        } else if (res.data.data && Array.isArray(res.data.data)) {
+          userData = res.data.data
+          totalCount = res.data.total || userData.length
         }
 
-        const processedUsers = filteredData.map((user) => ({
+        // Process users
+        const processedUsers = userData.map((user) => ({
           ...user,
           full_name: user.full_name?.trim() || "Kiritilmagan",
           phone_number: user.phone_number?.trim() || "Kiritilmagan",
           tg_user: user.tg_user?.trim() || "Kiritilmagan",
           address: user.address || "Kiritilmagan",
-          course_name: user.address === "a" ? "Huzur" : user.address === "b" ? "Uyg'onish" : "Kiritilmagan",
         }))
 
-        console.log("[v2] Processed users:", processedUsers)
+        // Cache the results
+        cacheRef.current.set(cacheKey, {
+          users: processedUsers,
+          timestamp: Date.now(),
+          courseFilter
+        })
 
-        const startIndex = (page - 1) * itemsPerPage
-        const endIndex = startIndex + itemsPerPage
-        const paginatedUsers = processedUsers.slice(startIndex, endIndex)
+        setUsers(processedUsers)
 
-        setUsers(paginatedUsers)
-
-        const totalUsers = processedUsers.length
-        const totalPages = Math.ceil(totalUsers / itemsPerPage)
+        const totalPages = Math.ceil(totalCount / itemsPerPage)
 
         setPagination({
           currentPage: page,
           totalPages: totalPages,
-          totalUsers: totalUsers,
+          totalUsers: totalCount,
           usersPerPage: itemsPerPage,
         })
       }
     } catch (error: any) {
       console.error("Foydalanuvchilarni yuklashda xatolik:", error)
-      if (error.name === "AbortError") {
+      if (error.name === "AbortError" || error.code === "ECONNABORTED") {
         setError("So'rov vaqti tugadi. Iltimos, qayta urinib ko'ring.")
-      } else if (error.code === "ECONNABORTED") {
-        setError("Internet aloqasi sekin. Iltimos, qayta urinib ko'ring.")
       } else {
         setError("Foydalanuvchilarni yuklashda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
       }
     } finally {
       setLoading(false)
     }
-  }
+  }, [courseFilter, itemsPerPage])
 
-  // Fetch course statistics
-  const fetchCourseStats = async () => {
+  // Optimized fetch course statistics with caching
+  const fetchCourseStats = useCallback(async () => {
+    // Check cache first
+    if (statsCacheRef.current && isCacheValid(statsCacheRef.current.timestamp)) {
+      setCourseStats(statsCacheRef.current.data)
+      return
+    }
+
     try {
-      const [allRes, huzurRes, uygonishRes] = await Promise.all([
-        axios.get(`https://b.imanakhmedovna.uz/users?limit=1000`),
-        axios.get(`https://b.imanakhmedovna.uz/users?address=a&limit=1000`),
-        axios.get(`https://b.imanakhmedovna.uz/users?address=b&limit=1000`),
-      ])
-
-      const today = new Date().toISOString().split("T")[0]
-      
-      const calculateTodayRegistrations = (data: User[]) => {
-        return data.filter((user) => 
-          user.createdAt && new Date(user.createdAt).toISOString().split("T")[0] === today
-        ).length
-      }
-
-      setCourseStats({
-        all: {
-          totalUsers: allRes.data?.length || 0,
-          todayRegistrations: calculateTodayRegistrations(allRes.data || [])
-        },
-        huzur: {
-          totalUsers: huzurRes.data?.length || 0,
-          todayRegistrations: calculateTodayRegistrations(huzurRes.data || [])
-        },
-        uygonish: {
-          totalUsers: uygonishRes.data?.length || 0,
-          todayRegistrations: calculateTodayRegistrations(uygonishRes.data || [])
-        }
+      // Fetch only once for all stats
+      const allRes = await axios.get(`https://b.imanakhmedovna.uz/users/stats/summary`, {
+        timeout: 3000,
       })
+
+      if (allRes.data) {
+        const stats = {
+          all: {
+            totalUsers: allRes.data.totalUsers || 0,
+            todayRegistrations: allRes.data.todayRegistrations || 0
+          },
+          huzur: {
+            totalUsers: allRes.data.addressAUsers || 0,
+            todayRegistrations: 0 // We'll calculate this from users data
+          },
+          uygonish: {
+            totalUsers: allRes.data.addressBUsers || 0,
+            todayRegistrations: 0
+          }
+        }
+
+        // Cache the stats
+        statsCacheRef.current = {
+          data: stats,
+          timestamp: Date.now()
+        }
+
+        setCourseStats(stats)
+      }
     } catch (error) {
       console.error("Statistikani yuklashda xatolik:", error)
-    }
-  }
+      // Fallback to individual requests if summary endpoint fails
+      try {
+        const [allRes, huzurRes, uygonishRes] = await Promise.all([
+          axios.get(`https://b.imanakhmedovna.uz/users?limit=1`).catch(() => ({ data: [] })),
+          axios.get(`https://b.imanakhmedovna.uz/users/address-a?limit=1`).catch(() => ({ data: [] })),
+          axios.get(`https://b.imanakhmedovna.uz/users/address-b?limit=1`).catch(() => ({ data: [] })),
+        ])
 
-  // Enhanced Excel export function with course filter
-  const downloadExcel = async () => {
+        const today = new Date().toISOString().split("T")[0]
+        
+        const calculateTodayRegistrations = (data: any) => {
+          if (!data || !Array.isArray(data.users)) return 0
+          return data.users.filter((user: User) => 
+            user.createdAt && new Date(user.createdAt).toISOString().split("T")[0] === today
+          ).length
+        }
+
+        const stats = {
+          all: {
+            totalUsers: allRes.data?.total || 0,
+            todayRegistrations: calculateTodayRegistrations(allRes.data)
+          },
+          huzur: {
+            totalUsers: huzurRes.data?.total || 0,
+            todayRegistrations: calculateTodayRegistrations(huzurRes.data)
+          },
+          uygonish: {
+            totalUsers: uygonishRes.data?.total || 0,
+            todayRegistrations: calculateTodayRegistrations(uygonishRes.data)
+          }
+        }
+
+        statsCacheRef.current = {
+          data: stats,
+          timestamp: Date.now()
+        }
+
+        setCourseStats(stats)
+      } catch (fallbackError) {
+        console.error("Fallback statistikada xatolik:", fallbackError)
+      }
+    }
+  }, [])
+
+  // Enhanced Excel export function - uses cached data
+  const downloadExcel = useCallback(async () => {
     try {
       setExportLoading(true)
 
-      // Fetch all users based on current filter
-      let exportData = await fetchAllUsersForExport()
+      // Get all cached users for current filter
+      let exportData: User[] = []
+      const cacheKeys = Array.from(cacheRef.current.keys())
+      
+      for (const key of cacheKeys) {
+        const cached = cacheRef.current.get(key)
+        if (cached && cached.courseFilter === courseFilter) {
+          exportData = [...exportData, ...cached.users]
+        }
+      }
+
+      // If no cache, fetch minimal data
+      if (exportData.length === 0) {
+        const params = new URLSearchParams()
+        if (courseFilter !== "all") {
+          params.append("address", courseFilter)
+        }
+        params.append("limit", "100") // Limit to 100 for export
+
+        const res = await axios.get(`https://b.imanakhmedovna.uz/users?${params.toString()}`, {
+          timeout: 10000,
+        })
+
+        if (res.data?.users) {
+          exportData = res.data.users
+        }
+      }
 
       // Prepare data for Excel
-      const excelData = exportData.map((user:any, index:any) => ({
+      const excelData = exportData.map((user, index) => ({
         "№": index + 1,
         "To'liq ismi": user.full_name || "Kiritilmagan",
         "Telefon raqami": user.phone_number || "Kiritilmagan",
@@ -240,8 +374,6 @@ export default function Dashboard() {
               year: "numeric",
               month: "2-digit",
               day: "2-digit",
-              hour: "2-digit",
-              minute: "2-digit",
             })
           : "Noma'lum",
       }))
@@ -252,12 +384,12 @@ export default function Dashboard() {
 
       // Set column widths
       const colWidths = [
-        { wch: 5 }, // №
-        { wch: 25 }, // To'liq ismi
-        { wch: 15 }, // Telefon
-        { wch: 15 }, // Kurs nomi
-        { wch: 20 }, // Telegram
-        { wch: 20 }, // Sana
+        { wch: 5 },
+        { wch: 25 },
+        { wch: 15 },
+        { wch: 15 },
+        { wch: 20 },
+        { wch: 15 },
       ]
       ws["!cols"] = colWidths
 
@@ -266,7 +398,7 @@ export default function Dashboard() {
                         courseFilter === "a" ? "Huzur_kursi" : "Uygonish_kursi"
       XLSX.utils.book_append_sheet(wb, ws, courseName)
 
-      // Generate filename with current date and course name
+      // Generate filename
       const currentDate = new Date().toISOString().split("T")[0]
       const filename = `${courseName}_${currentDate}.xlsx`
 
@@ -281,78 +413,66 @@ export default function Dashboard() {
     } finally {
       setExportLoading(false)
     }
-  }
+  }, [courseFilter])
 
-  const fetchAllUsersForExport = async () => {
-    try {
-      const params = new URLSearchParams()
-      if (courseFilter !== "all") {
-        params.append("address", courseFilter)
-      }
-
-      const res = await axios.get(`https://b.imanakhmedovna.uz/users?${params.toString()}`, {
-        timeout: 30000,
-      })
-
-      // Double filter just in case
-      let data = res.data || []
-      if (courseFilter !== "all") {
-        data = data.filter((user: User) => user.address === courseFilter)
-      }
-
-      return data
-    } catch (error) {
-      console.error("Export uchun ma'lumotlarni yuklashda xatolik:", error)
-      throw new Error("Ma'lumotlarni yuklashda xatolik yuz berdi")
-    }
-  }
-
-  const handlePageChange = (page: number) => {
-    console.log("[v2] Changing to page:", page)
+  const handlePageChange = useCallback((page: number) => {
     setCurrentPage(page)
     fetchUsers(page, searchTerm)
     window.scrollTo({ top: 0, behavior: "smooth" })
-  }
+  }, [fetchUsers, searchTerm])
 
-  const handleSearch = () => {
-    console.log("[v2] Manual search triggered with term:", searchTerm)
+  const handleSearch = useCallback(() => {
     setCurrentPage(1)
     fetchUsers(1, searchTerm)
-  }
+  }, [fetchUsers, searchTerm])
 
-  const handleSearchKeyPress = (e: React.KeyboardEvent) => {
+  const handleSearchKeyPress = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       handleSearch()
     }
-  }
+  }, [handleSearch])
 
   // Handle course filter change
-  const handleCourseFilterChange = (course: string) => {
+  const handleCourseFilterChange = useCallback((course: string) => {
     setCourseFilter(course)
     setCurrentPage(1)
-  }
+  }, [])
 
-  // Initial load
+  // Initial load - only once
   useEffect(() => {
     fetchUsers(1)
     fetchCourseStats()
-  }, [])
 
-  // Calculate today's registrations for current filter
+    // Set up periodic refresh for stats only (every 10 minutes)
+    const statsInterval = setInterval(() => {
+      fetchCourseStats()
+    }, 10 * 60 * 1000)
+
+    return () => {
+      clearInterval(statsInterval)
+    }
+  }, [fetchUsers, fetchCourseStats])
+
+  // Handle course filter or items per page change
+  useEffect(() => {
+    setCurrentPage(1)
+    fetchUsers(1, searchTerm)
+  }, [itemsPerPage, courseFilter, fetchUsers, searchTerm])
+
+  // Calculate today's registrations from cached data
   const todayRegistrations = useMemo(() => {
     const today = new Date().toISOString().split("T")[0]
     return users.filter((user) => {
-      // Filter by course first if needed
       if (courseFilter !== "all" && user.address !== courseFilter) return false
-      
       return user.createdAt && new Date(user.createdAt).toISOString().split("T")[0] === today
     }).length
   }, [users, courseFilter])
 
-  const renderPagination = () => {
+  // Memoized pagination render
+  const paginationItems = useMemo(() => {
     const totalPages = pagination.totalPages
     const currentPage = pagination.currentPage
-    const pages = []
+    const pages: (number | string)[] = []
 
     if (totalPages > 0) {
       pages.push(1)
@@ -379,7 +499,81 @@ export default function Dashboard() {
     }
 
     return pages
-  }
+  }, [pagination.totalPages, pagination.currentPage])
+
+  // Memoized table rows
+  const tableRows = useMemo(() => {
+    return users.map((user, index) => {
+      const globalIndex = (pagination.currentPage - 1) * itemsPerPage + index + 1
+      const courseName = user.address === "a" ? "Huzur" : user.address === "b" ? "Uyg'onish" : "Kiritilmagan"
+      const courseColor = user.address === "a" ? "bg-purple-100 text-purple-800" : 
+                        user.address === "b" ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-800"
+
+      return (
+        <tr key={`${user.id}-${index}`} className="hover:bg-blue-50 transition-colors duration-200">
+          <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+            {globalIndex}
+          </td>
+          <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
+            <div className="text-sm font-semibold text-gray-900">{user.full_name}</div>
+          </td>
+          <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
+            <div className="text-sm text-gray-700 font-mono">{user.phone_number}</div>
+          </td>
+          <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
+            <span className={`px-3 py-1 rounded-full text-xs font-medium ${courseColor}`}>
+              {courseName}
+            </span>
+          </td>
+          <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
+            {user.tg_user !== "Kiritilmagan" ? (
+              <a
+                href={`https://t.me/${user.tg_user.replace("@", "")}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:text-blue-800 flex items-center gap-2 text-sm font-medium transition-colors"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-4 w-4 sm:h-5 sm:w-5 text-blue-500"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                >
+                  <path d="M11 3a1 1 0 100 2h2.586l-6.293 6.293a1 1 0 101.414 1.414L15 6.414V9a1 1 0 102 0V4a1 1 0 00-1-1h-5z" />
+                  <path d="M5 5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-3a1 1 0 10-2 0v3H5V7h3a1 1 0 000-2H5z" />
+                </svg>
+                <span className="hidden sm:inline">{user.tg_user}</span>
+                <span className="sm:hidden">
+                  {user.tg_user.length > 10 ? user.tg_user.substring(0, 10) + "..." : user.tg_user}
+                </span>
+              </a>
+            ) : (
+              <span className="text-gray-400 text-sm italic">{user.tg_user}</span>
+            )}
+          </td>
+          <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-sm text-gray-600">
+            {user.createdAt
+              ? new Date(user.createdAt).toLocaleString("uz-UZ", {
+                  year: "numeric",
+                  month: "2-digit",
+                  day: "2-digit",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })
+              : "Noma'lum"}
+          </td>
+        </tr>
+      )
+    })
+  }, [users, pagination.currentPage, itemsPerPage])
+
+  // Clear cache function (optional, for debugging)
+  const clearCache = useCallback(() => {
+    cacheRef.current.clear()
+    statsCacheRef.current = null
+    lastRequestRef.current = null
+    alert("Cache tozalandi!")
+  }, [])
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 w-full">
@@ -387,7 +581,7 @@ export default function Dashboard() {
 
       <div className="w-full px-2 sm:px-4 lg:px-6 py-4 sm:py-8">
         <div className="bg-white rounded-xl sm:rounded-2xl shadow-2xl overflow-hidden border border-gray-100 w-full">
-          {/* Enhanced Header with better stats */}
+          {/* Enhanced Header */}
           <div className="bg-gradient-to-r from-blue-600 via-purple-600 to-indigo-700 px-4 sm:px-6 py-6 sm:py-8 text-white">
             <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 sm:gap-6">
               <div>
@@ -546,6 +740,15 @@ export default function Dashboard() {
                   </>
                 )}
               </button>
+              
+              {/* Cache clear button (optional, for debugging) */}
+              <button
+                onClick={clearCache}
+                className="ml-4 bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                title="Cache tozalash"
+              >
+                Cache tozalash
+              </button>
             </div>
           </div>
 
@@ -640,7 +843,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Enhanced Table content */}
+          {/* Table content */}
           {loading ? (
             <div className="flex justify-center items-center h-64">
               <div className="relative">
@@ -738,68 +941,7 @@ export default function Dashboard() {
                         </td>
                       </tr>
                     ) : (
-                      users.map((user, index) => {
-                        const globalIndex = (pagination.currentPage - 1) * itemsPerPage + index + 1
-                        const courseName = user.address === "a" ? "Huzur" : user.address === "b" ? "Uyg'onish" : "Kiritilmagan"
-                        const courseColor = user.address === "a" ? "bg-purple-100 text-purple-800" : 
-                                          user.address === "b" ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-800"
-
-                        return (
-                          <tr key={user.id} className="hover:bg-blue-50 transition-colors duration-200">
-                            <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                              {globalIndex}
-                            </td>
-                            <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
-                              <div className="text-sm font-semibold text-gray-900">{user.full_name}</div>
-                            </td>
-                            <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
-                              <div className="text-sm text-gray-700 font-mono">{user.phone_number}</div>
-                            </td>
-                            <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
-                              <span className={`px-3 py-1 rounded-full text-xs font-medium ${courseColor}`}>
-                                {courseName}
-                              </span>
-                            </td>
-                            <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
-                              {user.tg_user !== "Kiritilmagan" ? (
-                                <a
-                                  href={`https://t.me/${user.tg_user.replace("@", "")}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-blue-600 hover:text-blue-800 flex items-center gap-2 text-sm font-medium transition-colors"
-                                >
-                                  <svg
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    className="h-4 w-4 sm:h-5 sm:w-5 text-blue-500"
-                                    viewBox="0 0 20 20"
-                                    fill="currentColor"
-                                  >
-                                    <path d="M11 3a1 1 0 100 2h2.586l-6.293 6.293a1 1 0 101.414 1.414L15 6.414V9a1 1 0 102 0V4a1 1 0 00-1-1h-5z" />
-                                    <path d="M5 5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-3a1 1 0 10-2 0v3H5V7h3a1 1 0 000-2H5z" />
-                                  </svg>
-                                  <span className="hidden sm:inline">{user.tg_user}</span>
-                                  <span className="sm:hidden">
-                                    {user.tg_user.length > 10 ? user.tg_user.substring(0, 10) + "..." : user.tg_user}
-                                  </span>
-                                </a>
-                              ) : (
-                                <span className="text-gray-400 text-sm italic">{user.tg_user}</span>
-                              )}
-                            </td>
-                            <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-sm text-gray-600">
-                              {user.createdAt
-                                ? new Date(user.createdAt).toLocaleString("uz-UZ", {
-                                    year: "numeric",
-                                    month: "2-digit",
-                                    day: "2-digit",
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  })
-                                : "Noma'lum"}
-                            </td>
-                          </tr>
-                        )
-                      })
+                      tableRows
                     )}
                   </tbody>
                 </table>
@@ -829,7 +971,7 @@ export default function Dashboard() {
                         <span className="sm:hidden">←</span>
                       </button>
 
-                      {renderPagination().map((page, index) => (
+                      {paginationItems.map((page, index) => (
                         <button
                           key={index}
                           onClick={() => (typeof page === "number" ? handlePageChange(page) : null)}
@@ -864,12 +1006,4 @@ export default function Dashboard() {
       </div>
     </div>
   )
-}
-
-function debounce<T extends (...args: any[]) => any>(func: T, wait: number): T {
-  let timeout: NodeJS.Timeout
-  return ((...args: any[]) => {
-    clearTimeout(timeout)
-    timeout = setTimeout(() => func.apply(null, args), wait)
-  }) as T
 }
