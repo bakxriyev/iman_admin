@@ -97,7 +97,7 @@ export default function Dashboard() {
     fetchCourseStats()
   }, [itemsPerPage, courseFilter])
 
-  // Fetch users with course filter
+  // Fetch users with course filter - FIXED VERSION
   const fetchUsers = async (page = 1, search = "") => {
     try {
       setLoading(true)
@@ -117,7 +117,7 @@ export default function Dashboard() {
         params.append("address", courseFilter)
       }
 
-      console.log("[v1] Fetching users with params:", params.toString())
+      console.log("[v2] Fetching users with params:", params.toString())
 
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 8000)
@@ -129,14 +129,21 @@ export default function Dashboard() {
 
       clearTimeout(timeoutId)
 
-      console.log("[v1] API Response:", {
+      console.log("[v2] API Response:", {
         dataLength: res.data?.length,
+        data: res.data,
         headers: res.headers,
         totalCount: res.headers["x-total-count"],
       })
 
       if (res.data && Array.isArray(res.data)) {
-        const processedUsers = res.data.map((user) => ({
+        // Filter users by address if needed (double check)
+        let filteredData = res.data;
+        if (courseFilter !== "all") {
+          filteredData = res.data.filter(user => user.address === courseFilter);
+        }
+
+        const processedUsers = filteredData.map((user) => ({
           ...user,
           full_name: user.full_name?.trim() || "Kiritilmagan",
           phone_number: user.phone_number?.trim() || "Kiritilmagan",
@@ -145,15 +152,15 @@ export default function Dashboard() {
           course_name: user.address === "a" ? "Huzur" : user.address === "b" ? "Uyg'onish" : "Kiritilmagan",
         }))
 
+        console.log("[v2] Processed users:", processedUsers)
+
         const startIndex = (page - 1) * itemsPerPage
         const endIndex = startIndex + itemsPerPage
         const paginatedUsers = processedUsers.slice(startIndex, endIndex)
 
         setUsers(paginatedUsers)
 
-        const totalUsers = res.headers["x-total-count"]
-          ? Number.parseInt(res.headers["x-total-count"])
-          : processedUsers.length
+        const totalUsers = processedUsers.length
         const totalPages = Math.ceil(totalUsers / itemsPerPage)
 
         setPagination({
@@ -287,7 +294,13 @@ export default function Dashboard() {
         timeout: 30000,
       })
 
-      return res.data || []
+      // Double filter just in case
+      let data = res.data || []
+      if (courseFilter !== "all") {
+        data = data.filter((user: User) => user.address === courseFilter)
+      }
+
+      return data
     } catch (error) {
       console.error("Export uchun ma'lumotlarni yuklashda xatolik:", error)
       throw new Error("Ma'lumotlarni yuklashda xatolik yuz berdi")
@@ -295,14 +308,14 @@ export default function Dashboard() {
   }
 
   const handlePageChange = (page: number) => {
-    console.log("[v1] Changing to page:", page)
+    console.log("[v2] Changing to page:", page)
     setCurrentPage(page)
     fetchUsers(page, searchTerm)
     window.scrollTo({ top: 0, behavior: "smooth" })
   }
 
   const handleSearch = () => {
-    console.log("[v1] Manual search triggered with term:", searchTerm)
+    console.log("[v2] Manual search triggered with term:", searchTerm)
     setCurrentPage(1)
     fetchUsers(1, searchTerm)
   }
@@ -316,6 +329,7 @@ export default function Dashboard() {
   // Handle course filter change
   const handleCourseFilterChange = (course: string) => {
     setCourseFilter(course)
+    setCurrentPage(1)
   }
 
   // Initial load
@@ -327,9 +341,13 @@ export default function Dashboard() {
   // Calculate today's registrations for current filter
   const todayRegistrations = useMemo(() => {
     const today = new Date().toISOString().split("T")[0]
-    return users.filter((user) => user.createdAt && new Date(user.createdAt).toISOString().split("T")[0] === today)
-      .length
-  }, [users])
+    return users.filter((user) => {
+      // Filter by course first if needed
+      if (courseFilter !== "all" && user.address !== courseFilter) return false
+      
+      return user.createdAt && new Date(user.createdAt).toISOString().split("T")[0] === today
+    }).length
+  }, [users, courseFilter])
 
   const renderPagination = () => {
     const totalPages = pagination.totalPages
@@ -392,8 +410,8 @@ export default function Dashboard() {
               </div>
 
               {/* Course Filter Tabs */}
-              <div className="flex flex-wrap gap-2 sm:gap-4 w-full lg:w-auto">
-                <div className="bg-white/10 backdrop-blur-sm rounded-xl p-2 flex items-center gap-2">
+              <div className="bg-white/10 backdrop-blur-sm rounded-xl p-2">
+                <div className="flex flex-wrap gap-2">
                   {Object.entries(COURSE_NAMES).map(([key, name]) => (
                     <button
                       key={key}
@@ -408,6 +426,20 @@ export default function Dashboard() {
                     </button>
                   ))}
                 </div>
+              </div>
+            </div>
+
+            {/* Current Filter Display */}
+            <div className="mt-4">
+              <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3 inline-block">
+                <span className="text-white font-medium">
+                  Hozirgi filtr: <span className="text-yellow-300 font-bold">{COURSE_NAMES[courseFilter as keyof typeof COURSE_NAMES]}</span>
+                </span>
+                <span className="ml-4 text-sm text-blue-100">
+                  {courseFilter === "all" ? "Barcha kurslar ko'rsatilmoqda" : 
+                   courseFilter === "a" ? "Faqat Huzur kursi ko'rsatilmoqda" : 
+                   "Faqat Uyg'onish kursi ko'rsatilmoqda"}
+                </span>
               </div>
             </div>
 
@@ -694,7 +726,11 @@ export default function Dashboard() {
                                 d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 00-.707.293h-3.172a1 1 0 00-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
                               />
                             </svg>
-                            <p className="text-base sm:text-lg font-medium">Foydalanuvchilar topilmadi</p>
+                            <p className="text-base sm:text-lg font-medium">
+                              {courseFilter === "all" ? "Hech qanday foydalanuvchi topilmadi" :
+                               courseFilter === "a" ? "Huzur kursida hech qanday foydalanuvchi topilmadi" :
+                               "Uyg'onish kursida hech qanday foydalanuvchi topilmadi"}
+                            </p>
                             <p className="text-xs sm:text-sm text-gray-400">
                               Qidiruv shartlaringizni o'zgartiring yoki keyinroq qayta urinib ko'ring
                             </p>
