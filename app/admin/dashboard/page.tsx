@@ -13,6 +13,8 @@ interface User {
   full_name: string
   phone_number: string
   tg_user: string
+  type: string | null
+  address: string
   createdAt: string
 }
 
@@ -23,22 +25,45 @@ interface PaginationInfo {
   usersPerPage: number
 }
 
+interface CourseStats {
+  totalUsers: number
+  todayRegistrations: number
+}
+
 export default function Dashboard() {
   const [users, setUsers] = useState<User[]>([])
-  const [allUsers, setAllUsers] = useState<User[]>([]) // For Excel export
+  const [allUsers, setAllUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [exportLoading, setExportLoading] = useState(false)
   const [error, setError] = useState("")
   const [searchTerm, setSearchTerm] = useState("")
   const [currentPage, setCurrentPage] = useState(1)
-  const [itemsPerPage, setItemsPerPage] = useState(10) // Changed default to 10
+  const [itemsPerPage, setItemsPerPage] = useState(10)
+  const [courseFilter, setCourseFilter] = useState<string>("all") // "all", "a", "b"
   const [pagination, setPagination] = useState<PaginationInfo>({
     currentPage: 1,
     totalPages: 1,
     totalUsers: 0,
-    usersPerPage: 10, // Changed default to 10
+    usersPerPage: 10,
   })
+  const [courseStats, setCourseStats] = useState<{
+    all: CourseStats
+    huzur: CourseStats
+    uygonish: CourseStats
+  }>({
+    all: { totalUsers: 0, todayRegistrations: 0 },
+    huzur: { totalUsers: 0, todayRegistrations: 0 },
+    uygonish: { totalUsers: 0, todayRegistrations: 0 },
+  })
+  
   const router = useRouter()
+
+  // Kurs nomlari
+  const COURSE_NAMES = {
+    all: "Barcha kurslar",
+    a: "Huzur kursi",
+    b: "Uyg'onish kursi",
+  }
 
   // Check authentication
   useEffect(() => {
@@ -65,11 +90,14 @@ export default function Dashboard() {
     }
   }, [searchTerm, debouncedSearch])
 
+  // Handle course filter or items per page change
   useEffect(() => {
     setCurrentPage(1)
     fetchUsers(1, searchTerm)
-  }, [itemsPerPage])
+    fetchCourseStats()
+  }, [itemsPerPage, courseFilter])
 
+  // Fetch users with course filter
   const fetchUsers = async (page = 1, search = "") => {
     try {
       setLoading(true)
@@ -84,19 +112,24 @@ export default function Dashboard() {
         params.append("search", search.trim())
       }
 
-      console.log("[v0] Fetching users with params:", params.toString())
+      // Add course filter if not "all"
+      if (courseFilter !== "all") {
+        params.append("address", courseFilter)
+      }
+
+      console.log("[v1] Fetching users with params:", params.toString())
 
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 8000)
 
-      const res = await axios.get(`https://backend.imanakhmedovna.uz/user?${params}`, {
+      const res = await axios.get(`https://b.imanakhmedovna.uz/users?${params}`, {
         signal: controller.signal,
         timeout: 8000,
       })
 
       clearTimeout(timeoutId)
 
-      console.log("[v0] API Response:", {
+      console.log("[v1] API Response:", {
         dataLength: res.data?.length,
         headers: res.headers,
         totalCount: res.headers["x-total-count"],
@@ -108,19 +141,13 @@ export default function Dashboard() {
           full_name: user.full_name?.trim() || "Kiritilmagan",
           phone_number: user.phone_number?.trim() || "Kiritilmagan",
           tg_user: user.tg_user?.trim() || "Kiritilmagan",
+          address: user.address || "Kiritilmagan",
+          course_name: user.address === "a" ? "Huzur" : user.address === "b" ? "Uyg'onish" : "Kiritilmagan",
         }))
 
         const startIndex = (page - 1) * itemsPerPage
         const endIndex = startIndex + itemsPerPage
         const paginatedUsers = processedUsers.slice(startIndex, endIndex)
-
-        console.log("[v0] Pagination slicing:", {
-          totalUsers: processedUsers.length,
-          startIndex,
-          endIndex,
-          paginatedUsers: paginatedUsers.length,
-          itemsPerPage,
-        })
 
         setUsers(paginatedUsers)
 
@@ -128,13 +155,6 @@ export default function Dashboard() {
           ? Number.parseInt(res.headers["x-total-count"])
           : processedUsers.length
         const totalPages = Math.ceil(totalUsers / itemsPerPage)
-
-        console.log("[v0] Pagination calculated:", {
-          totalUsers,
-          totalPages,
-          currentPage: page,
-          itemsPerPage,
-        })
 
         setPagination({
           currentPage: page,
@@ -157,21 +177,56 @@ export default function Dashboard() {
     }
   }
 
-  // Enhanced Excel export function
+  // Fetch course statistics
+  const fetchCourseStats = async () => {
+    try {
+      const [allRes, huzurRes, uygonishRes] = await Promise.all([
+        axios.get(`https://b.imanakhmedovna.uz/users?limit=1000`),
+        axios.get(`https://b.imanakhmedovna.uz/users?address=a&limit=1000`),
+        axios.get(`https://b.imanakhmedovna.uz/users?address=b&limit=1000`),
+      ])
+
+      const today = new Date().toISOString().split("T")[0]
+      
+      const calculateTodayRegistrations = (data: User[]) => {
+        return data.filter((user) => 
+          user.createdAt && new Date(user.createdAt).toISOString().split("T")[0] === today
+        ).length
+      }
+
+      setCourseStats({
+        all: {
+          totalUsers: allRes.data?.length || 0,
+          todayRegistrations: calculateTodayRegistrations(allRes.data || [])
+        },
+        huzur: {
+          totalUsers: huzurRes.data?.length || 0,
+          todayRegistrations: calculateTodayRegistrations(huzurRes.data || [])
+        },
+        uygonish: {
+          totalUsers: uygonishRes.data?.length || 0,
+          todayRegistrations: calculateTodayRegistrations(uygonishRes.data || [])
+        }
+      })
+    } catch (error) {
+      console.error("Statistikani yuklashda xatolik:", error)
+    }
+  }
+
+  // Enhanced Excel export function with course filter
   const downloadExcel = async () => {
     try {
       setExportLoading(true)
 
-      let exportData = allUsers
-      if (allUsers.length === 0) {
-        exportData = await fetchAllUsers()
-      }
+      // Fetch all users based on current filter
+      let exportData = await fetchAllUsersForExport()
 
       // Prepare data for Excel
       const excelData = exportData.map((user, index) => ({
         "№": index + 1,
         "To'liq ismi": user.full_name || "Kiritilmagan",
         "Telefon raqami": user.phone_number || "Kiritilmagan",
+        "Kurs nomi": user.address === "a" ? "Huzur" : user.address === "b" ? "Uyg'onish" : "Kiritilmagan",
         Telegram: user.tg_user || "Kiritilmagan",
         "Ro'yxatdan o'tgan sana": user.createdAt
           ? new Date(user.createdAt).toLocaleString("uz-UZ", {
@@ -193,17 +248,20 @@ export default function Dashboard() {
         { wch: 5 }, // №
         { wch: 25 }, // To'liq ismi
         { wch: 15 }, // Telefon
+        { wch: 15 }, // Kurs nomi
         { wch: 20 }, // Telegram
         { wch: 20 }, // Sana
       ]
       ws["!cols"] = colWidths
 
       // Add worksheet to workbook
-      XLSX.utils.book_append_sheet(wb, ws, "Foydalanuvchilar")
+      const courseName = courseFilter === "all" ? "Barcha_kurslar" : 
+                        courseFilter === "a" ? "Huzur_kursi" : "Uygonish_kursi"
+      XLSX.utils.book_append_sheet(wb, ws, courseName)
 
-      // Generate filename with current date
+      // Generate filename with current date and course name
       const currentDate = new Date().toISOString().split("T")[0]
-      const filename = `foydalanuvchilar_${currentDate}.xlsx`
+      const filename = `${courseName}_${currentDate}.xlsx`
 
       // Download file
       XLSX.writeFile(wb, filename)
@@ -218,38 +276,33 @@ export default function Dashboard() {
     }
   }
 
-  const fetchAllUsers = async () => {
+  const fetchAllUsersForExport = async () => {
     try {
-      setExportLoading(true)
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 30000) // 30 second timeout for export
+      const params = new URLSearchParams()
+      if (courseFilter !== "all") {
+        params.append("address", courseFilter)
+      }
 
-      const res = await axios.get(`https://backend.imanakhmedovna.uz/user`, {
-        signal: controller.signal,
+      const res = await axios.get(`https://b.imanakhmedovna.uz/users?${params.toString()}`, {
         timeout: 30000,
       })
 
-      clearTimeout(timeoutId)
-      setAllUsers(res.data)
-      return res.data
+      return res.data || []
     } catch (error) {
-      console.error("Barcha foydalanuvchilarni yuklashda xatolik:", error)
+      console.error("Export uchun ma'lumotlarni yuklashda xatolik:", error)
       throw new Error("Ma'lumotlarni yuklashda xatolik yuz berdi")
-    } finally {
-      setExportLoading(false)
     }
   }
 
   const handlePageChange = (page: number) => {
-    console.log("[v0] Changing to page:", page)
+    console.log("[v1] Changing to page:", page)
     setCurrentPage(page)
     fetchUsers(page, searchTerm)
-    // Smooth scroll to top
     window.scrollTo({ top: 0, behavior: "smooth" })
   }
 
   const handleSearch = () => {
-    console.log("[v0] Manual search triggered with term:", searchTerm)
+    console.log("[v1] Manual search triggered with term:", searchTerm)
     setCurrentPage(1)
     fetchUsers(1, searchTerm)
   }
@@ -260,12 +313,18 @@ export default function Dashboard() {
     }
   }
 
+  // Handle course filter change
+  const handleCourseFilterChange = (course: string) => {
+    setCourseFilter(course)
+  }
+
   // Initial load
   useEffect(() => {
     fetchUsers(1)
+    fetchCourseStats()
   }, [])
 
-  // Calculate today's registrations
+  // Calculate today's registrations for current filter
   const todayRegistrations = useMemo(() => {
     const today = new Date().toISOString().split("T")[0]
     return users.filter((user) => user.createdAt && new Date(user.createdAt).toISOString().split("T")[0] === today)
@@ -277,24 +336,20 @@ export default function Dashboard() {
     const currentPage = pagination.currentPage
     const pages = []
 
-    // Always show first page
     if (totalPages > 0) {
       pages.push(1)
     }
 
-    // Add ellipsis and current page area
     if (currentPage > 4) {
       pages.push("...")
     }
 
-    // Add pages around current page
     for (let i = Math.max(2, currentPage - 2); i <= Math.min(totalPages - 1, currentPage + 2); i++) {
       if (!pages.includes(i)) {
         pages.push(i)
       }
     }
 
-    // Add ellipsis and last page
     if (currentPage < totalPages - 3) {
       if (!pages.includes("...")) {
         pages.push("...")
@@ -332,118 +387,133 @@ export default function Dashboard() {
                   Admin Dashboard
                 </h1>
                 <p className="text-blue-100 text-sm sm:text-lg">
-                 Iman Akhmedovna | Admin Panel
+                  Iman Akhmedovna | Admin Panel
                 </p>
               </div>
 
+              {/* Course Filter Tabs */}
               <div className="flex flex-wrap gap-2 sm:gap-4 w-full lg:w-auto">
-                <div className="bg-white/20 backdrop-blur-sm rounded-lg sm:rounded-xl p-3 sm:p-4 flex items-center gap-2 sm:gap-3 min-w-[160px] sm:min-w-[200px] flex-1 lg:flex-none">
-                  <div className="bg-blue-500 p-2 sm:p-3 rounded-lg shadow-md">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-5 w-5 sm:h-6 sm:w-6"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
+                <div className="bg-white/10 backdrop-blur-sm rounded-xl p-2 flex items-center gap-2">
+                  {Object.entries(COURSE_NAMES).map(([key, name]) => (
+                    <button
+                      key={key}
+                      onClick={() => handleCourseFilterChange(key)}
+                      className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                        courseFilter === key
+                          ? "bg-white text-blue-700 shadow-lg"
+                          : "text-white hover:bg-white/20"
+                      }`}
                     >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <p className="text-xs sm:text-sm text-blue-100 font-medium">Jami foydalanuvchilar</p>
-                    <p className="text-xl sm:text-3xl font-bold flex items-center">
-                      {pagination.totalUsers.toLocaleString()}
-                      <span className="ml-2 flex items-center">
-                        <span className="relative flex h-2 w-2 sm:h-3 sm:w-3">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2 w-2 sm:h-3 sm:w-3 bg-green-500"></span>
-                        </span>
-                        <span className="ml-1 text-xs font-normal text-green-300">LIVE</span>
-                      </span>
-                    </p>
-                  </div>
+                      {name}
+                    </button>
+                  ))}
                 </div>
-
-                <div className="bg-white/20 backdrop-blur-sm rounded-lg sm:rounded-xl p-3 sm:p-4 flex items-center gap-2 sm:gap-3 min-w-[140px] sm:min-w-[180px] flex-1 lg:flex-none">
-                  <div className="bg-purple-500 p-2 sm:p-3 rounded-lg shadow-md">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-5 w-5 sm:h-6 sm:w-6"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <p className="text-xs sm:text-sm text-blue-100 font-medium">Bugun qo'shilganlar</p>
-                    <p className="text-xl sm:text-3xl font-bold">{todayRegistrations}</p>
-                  </div>
-                </div>
-
-                <button
-                  onClick={downloadExcel}
-                  disabled={exportLoading}
-                  className="bg-green-500 hover:bg-green-600 disabled:bg-green-400 text-white px-4 sm:px-6 py-3 sm:py-4 rounded-lg sm:rounded-xl transition-all shadow-lg flex items-center gap-2 sm:gap-3 font-semibold min-w-[140px] sm:min-w-[160px] justify-center text-sm sm:text-base"
-                >
-                  {exportLoading ? (
-                    <>
-                      <svg
-                        className="animate-spin h-4 w-4 sm:h-5 sm:w-5"
-                        xmlns="http://www.w3.org/2000/svg"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                      >
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                        ></circle>
-                        <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                        ></path>
-                      </svg>
-                      <span className="hidden sm:inline">Yuklanmoqda...</span>
-                      <span className="sm:hidden">Yuklanmoqda</span>
-                    </>
-                  ) : (
-                    <>
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="h-4 w-4 sm:h-6 sm:w-6"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                        />
-                      </svg>
-                      <span className="hidden sm:inline">Excel yuklash</span>
-                      <span className="sm:hidden">Excel</span>
-                    </>
-                  )}
-                </button>
               </div>
+            </div>
+
+            {/* Course Statistics */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
+              <div className="bg-white/20 backdrop-blur-sm rounded-xl p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-blue-100 text-sm">Barcha kurslar</p>
+                    <p className="text-2xl font-bold">{courseStats.all.totalUsers.toLocaleString()}</p>
+                    <p className="text-green-300 text-sm">Bugun: {courseStats.all.todayRegistrations}</p>
+                  </div>
+                  <div className="bg-blue-500 p-3 rounded-lg">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white/20 backdrop-blur-sm rounded-xl p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-blue-100 text-sm">Huzur kursi</p>
+                    <p className="text-2xl font-bold">{courseStats.huzur.totalUsers.toLocaleString()}</p>
+                    <p className="text-green-300 text-sm">Bugun: {courseStats.huzur.todayRegistrations}</p>
+                  </div>
+                  <div className="bg-purple-500 p-3 rounded-lg">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white/20 backdrop-blur-sm rounded-xl p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-blue-100 text-sm">Uyg'onish kursi</p>
+                    <p className="text-2xl font-bold">{courseStats.uygonish.totalUsers.toLocaleString()}</p>
+                    <p className="text-green-300 text-sm">Bugun: {courseStats.uygonish.todayRegistrations}</p>
+                  </div>
+                  <div className="bg-amber-500 p-3 rounded-lg">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Export Button */}
+            <div className="mt-6">
+              <button
+                onClick={downloadExcel}
+                disabled={exportLoading}
+                className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 disabled:opacity-50 text-white px-6 py-3 rounded-xl transition-all shadow-lg flex items-center gap-3 font-semibold"
+              >
+                {exportLoading ? (
+                  <>
+                    <svg
+                      className="animate-spin h-5 w-5"
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      ></circle>
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                    <span>Yuklanmoqda...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-6 w-6"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                      />
+                    </svg>
+                    <span>
+                      {courseFilter === "all" ? "Barcha kurslarni Excel'ga yuklash" :
+                       courseFilter === "a" ? "Huzur kursini Excel'ga yuklash" :
+                       "Uyg'onish kursini Excel'ga yuklash"}
+                    </span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
 
@@ -466,7 +536,7 @@ export default function Dashboard() {
                 </div>
                 <input
                   type="text"
-                  placeholder="Ism, telefon yoki telegram bo'yicha qidirish..."
+                  placeholder="Ism, telefon yoki kurs bo'yicha qidirish..."
                   className="pl-10 pr-20 py-3 w-full rounded-xl border-2 border-gray-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm sm:text-base"
                   value={searchTerm}
                   onChange={(e) => {
@@ -530,6 +600,9 @@ export default function Dashboard() {
                   <span className="bg-gray-100 text-gray-800 px-3 py-1 rounded-full font-medium">
                     Jami: {pagination.totalUsers} ta
                   </span>
+                  <span className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full font-medium">
+                    {COURSE_NAMES[courseFilter as keyof typeof COURSE_NAMES]}
+                  </span>
                 </div>
               </div>
             </div>
@@ -592,6 +665,9 @@ export default function Dashboard() {
                         Telefon raqami
                       </th>
                       <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">
+                        Kurs nomi
+                      </th>
+                      <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">
                         Telegram
                       </th>
                       <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">
@@ -602,7 +678,7 @@ export default function Dashboard() {
                   <tbody className="bg-white divide-y divide-gray-200">
                     {users.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="px-3 sm:px-6 py-8 sm:py-12 text-center text-gray-500">
+                        <td colSpan={6} className="px-3 sm:px-6 py-8 sm:py-12 text-center text-gray-500">
                           <div className="flex flex-col items-center">
                             <svg
                               className="h-8 w-8 sm:h-12 sm:w-12 text-gray-400 mb-4"
@@ -628,6 +704,9 @@ export default function Dashboard() {
                     ) : (
                       users.map((user, index) => {
                         const globalIndex = (pagination.currentPage - 1) * itemsPerPage + index + 1
+                        const courseName = user.address === "a" ? "Huzur" : user.address === "b" ? "Uyg'onish" : "Kiritilmagan"
+                        const courseColor = user.address === "a" ? "bg-purple-100 text-purple-800" : 
+                                          user.address === "b" ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-800"
 
                         return (
                           <tr key={user.id} className="hover:bg-blue-50 transition-colors duration-200">
@@ -639,6 +718,11 @@ export default function Dashboard() {
                             </td>
                             <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
                               <div className="text-sm text-gray-700 font-mono">{user.phone_number}</div>
+                            </td>
+                            <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
+                              <span className={`px-3 py-1 rounded-full text-xs font-medium ${courseColor}`}>
+                                {courseName}
+                              </span>
                             </td>
                             <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
                               {user.tg_user !== "Kiritilmagan" ? (

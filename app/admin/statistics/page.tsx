@@ -43,7 +43,7 @@ export default function Statistics() {
 
         const controller = new AbortController()
     
-        const res = await axios.get<User[]>(`https://backend.imanakhmedovna.uz/user`, {
+        const res = await axios.get<User[]>(`https://b.imanakhmedovna.uz/users`, {
           signal: controller.signal,
           timeout: 5000,
         })
