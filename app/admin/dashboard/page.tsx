@@ -169,7 +169,7 @@ export default function Dashboard() {
       }
 
       // Prevent duplicate requests
-      const requestUrl = `https://b.imanakhmedovna.uz/users?${params}`
+      const requestUrl = `https://b.kardioclinic.uz/userscha?${params}`
       if (lastRequestRef.current?.url === requestUrl && 
           Date.now() - lastRequestRef.current.timestamp < 2000) {
         return
@@ -255,7 +255,7 @@ export default function Dashboard() {
 
     try {
       // Fetch only once for all stats
-      const allRes = await axios.get(`https://b.imanakhmedovna.uz/users/stats/summary`, {
+      const allRes = await axios.get(`https://b.kardioclinic.uz/userscha/stats/summary`, {
         timeout: 3000,
       })
 
@@ -288,9 +288,9 @@ export default function Dashboard() {
       // Fallback to individual requests if summary endpoint fails
       try {
         const [allRes, huzurRes, uygonishRes] = await Promise.all([
-          axios.get(`https://b.imanakhmedovna.uz/users?limit=1`).catch(() => ({ data: [] })),
-          axios.get(`https://b.imanakhmedovna.uz/users/address-a?limit=1`).catch(() => ({ data: [] })),
-          axios.get(`https://b.imanakhmedovna.uz/users/address-b?limit=1`).catch(() => ({ data: [] })),
+          axios.get(`https://b.kardioclinic.uz/userscha?limit=1`).catch(() => ({ data: [] })),
+          axios.get(`https://b.kardioclinic.uz/userscha/address-a?limit=1`).catch(() => ({ data: [] })),
+          axios.get(`https://b.kardioclinic.uz/userscha/address-b?limit=1`).catch(() => ({ data: [] })),
         ])
 
         const today = new Date().toISOString().split("T")[0]
@@ -353,7 +353,7 @@ export default function Dashboard() {
         }
         params.append("limit", "100") // Limit to 100 for export
 
-        const res = await axios.get(`https://b.imanakhmedovna.uz/users?${params.toString()}`, {
+        const res = await axios.get(`https://b.kardioclinic.uz/userscha?${params.toString()}`, {
           timeout: 10000,
         })
 
