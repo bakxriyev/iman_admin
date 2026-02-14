@@ -17,27 +17,14 @@ interface User {
   createdAt: string
 }
 
-interface PaginationInfo {
-  currentPage: number
-  totalPages: number
-  totalUsers: number
-  usersPerPage: number
-}
-
 interface CourseStats {
   totalUsers: number
   todayRegistrations: number
 }
 
-// Cache system for users data
-interface CacheData {
-  users: User[]
-  timestamp: number
-  courseFilter: string
-}
-
 export default function Dashboard() {
-  const [users, setUsers] = useState<User[]>([])
+  const [allUsers, setAllUsers] = useState<User[]>([])
+  const [filteredUsers, setFilteredUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [exportLoading, setExportLoading] = useState(false)
   const [error, setError] = useState("")
@@ -45,12 +32,6 @@ export default function Dashboard() {
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(10)
   const [courseFilter, setCourseFilter] = useState<string>("all")
-  const [pagination, setPagination] = useState<PaginationInfo>({
-    currentPage: 1,
-    totalPages: 1,
-    totalUsers: 0,
-    usersPerPage: 10,
-  })
   const [courseStats, setCourseStats] = useState<{
     all: CourseStats
     huzur: CourseStats
@@ -61,11 +42,6 @@ export default function Dashboard() {
     uygonish: { totalUsers: 0, todayRegistrations: 0 },
   })
 
-  // Refs for caching
-  const cacheRef = useRef<Map<string, CacheData>>(new Map())
-  const statsCacheRef = useRef<{ data: any; timestamp: number } | null>(null)
-  const lastRequestRef = useRef<{ url: string; timestamp: number } | null>(null)
-  
   const router = useRouter()
 
   // Kurs nomlari
@@ -82,128 +58,25 @@ export default function Dashboard() {
     }
   }, [router])
 
-  // Cache duration - 5 minutes
-  const CACHE_DURATION = 5 * 60 * 1000
-
-  // Check if cache is valid
-  const isCacheValid = (timestamp: number): boolean => {
-    return Date.now() - timestamp < CACHE_DURATION
-  }
-
-  // Get cache key for current state
-  const getCacheKey = (page: number, search: string, filter: string): string => {
-    return `${page}-${search}-${filter}-${itemsPerPage}`
-  }
-
-  // Optimized debounce function
-  const useDebounce = (callback: Function, delay: number) => {
-    const timeoutRef = useRef<NodeJS.Timeout | null>(null)
-
-    return useCallback((...args: any[]) => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current)
-      }
-      
-      timeoutRef.current = setTimeout(() => {
-        callback(...args)
-      }, delay)
-    }, [callback, delay])
-  }
-
-  // Debounced search function
-  const debouncedSearch = useDebounce((term: string) => {
-    setCurrentPage(1)
-    fetchUsers(1, term)
-  }, 500)
-
-  // Handle search input change
-  useEffect(() => {
-    if (searchTerm) {
-      debouncedSearch(searchTerm)
-    } else {
-      fetchUsers(currentPage)
-    }
-  }, [searchTerm])
-
-  // Optimized fetch users function with caching
-  const fetchUsers = useCallback(async (page = 1, search = "") => {
-    const cacheKey = getCacheKey(page, search, courseFilter)
-    
-    // Check cache first
-    if (cacheRef.current.has(cacheKey)) {
-      const cachedData = cacheRef.current.get(cacheKey)!
-      if (isCacheValid(cachedData.timestamp)) {
-        setUsers(cachedData.users)
-        
-        const totalUsers = cachedData.users.length
-        const totalPages = Math.ceil(totalUsers / itemsPerPage)
-        
-        setPagination({
-          currentPage: page,
-          totalPages: totalPages,
-          totalUsers: totalUsers,
-          usersPerPage: itemsPerPage,
-        })
-        
-        setLoading(false)
-        return
-      }
-    }
-
+  const fetchAllUsers = useCallback(async () => {
     try {
       setLoading(true)
       setError("")
 
-      const params = new URLSearchParams({
-        page: page.toString(),
-        limit: itemsPerPage.toString(),
+      const res = await axios.get("https://b.kardioclinic.uz/userscha", {
+        timeout: 10000,
       })
-
-      if (search && search.trim()) {
-        params.append("search", search.trim())
-      }
-
-      // Add course filter if not "all"
-      if (courseFilter !== "all") {
-        params.append("address", courseFilter)
-      }
-
-      // Prevent duplicate requests
-      const requestUrl = `https://b.kardioclinic.uz/userscha?${params}`
-      if (lastRequestRef.current?.url === requestUrl && 
-          Date.now() - lastRequestRef.current.timestamp < 2000) {
-        return
-      }
-
-      lastRequestRef.current = {
-        url: requestUrl,
-        timestamp: Date.now()
-      }
-
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 5000)
-
-      const res = await axios.get(requestUrl, {
-        signal: controller.signal,
-        timeout: 5000,
-      })
-
-      clearTimeout(timeoutId)
 
       if (res.data) {
-        // Handle both array and paginated response formats
         let userData: User[] = []
-        let totalCount = 0
         
+        // Backend turli formatda qaytarishi mumkin
         if (Array.isArray(res.data)) {
           userData = res.data
-          totalCount = userData.length
         } else if (res.data.users && Array.isArray(res.data.users)) {
           userData = res.data.users
-          totalCount = res.data.total || userData.length
         } else if (res.data.data && Array.isArray(res.data.data)) {
           userData = res.data.data
-          totalCount = res.data.total || userData.length
         }
 
         // Process users
@@ -215,155 +88,78 @@ export default function Dashboard() {
           address: user.address || "Kiritilmagan",
         }))
 
-        // Cache the results
-        cacheRef.current.set(cacheKey, {
-          users: processedUsers,
-          timestamp: Date.now(),
-          courseFilter
-        })
+        setAllUsers(processedUsers)
+        setFilteredUsers(processedUsers)
 
-        setUsers(processedUsers)
-
-        const totalPages = Math.ceil(totalCount / itemsPerPage)
-
-        setPagination({
-          currentPage: page,
-          totalPages: totalPages,
-          totalUsers: totalCount,
-          usersPerPage: itemsPerPage,
-        })
+        // Calculate statistics
+        calculateStats(processedUsers)
       }
     } catch (error: any) {
       console.error("Foydalanuvchilarni yuklashda xatolik:", error)
-      if (error.name === "AbortError" || error.code === "ECONNABORTED") {
-        setError("So'rov vaqti tugadi. Iltimos, qayta urinib ko'ring.")
-      } else {
-        setError("Foydalanuvchilarni yuklashda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
-      }
+      setError("Foydalanuvchilarni yuklashda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
     } finally {
       setLoading(false)
     }
-  }, [courseFilter, itemsPerPage])
-
-  // Optimized fetch course statistics with caching
-  const fetchCourseStats = useCallback(async () => {
-    // Check cache first
-    if (statsCacheRef.current && isCacheValid(statsCacheRef.current.timestamp)) {
-      setCourseStats(statsCacheRef.current.data)
-      return
-    }
-
-    try {
-      // Fetch only once for all stats
-      const allRes = await axios.get(`https://b.kardioclinic.uz/userscha/stats/summary`, {
-        timeout: 3000,
-      })
-
-      if (allRes.data) {
-        const stats = {
-          all: {
-            totalUsers: allRes.data.totalUsers || 0,
-            todayRegistrations: allRes.data.todayRegistrations || 0
-          },
-          huzur: {
-            totalUsers: allRes.data.addressAUsers || 0,
-            todayRegistrations: 0 // We'll calculate this from users data
-          },
-          uygonish: {
-            totalUsers: allRes.data.addressBUsers || 0,
-            todayRegistrations: 0
-          }
-        }
-
-        // Cache the stats
-        statsCacheRef.current = {
-          data: stats,
-          timestamp: Date.now()
-        }
-
-        setCourseStats(stats)
-      }
-    } catch (error) {
-      console.error("Statistikani yuklashda xatolik:", error)
-      // Fallback to individual requests if summary endpoint fails
-      try {
-        const [allRes, huzurRes, uygonishRes] = await Promise.all([
-          axios.get(`https://b.kardioclinic.uz/userscha?limit=1`).catch(() => ({ data: [] })),
-          axios.get(`https://b.kardioclinic.uz/userscha/address-a?limit=1`).catch(() => ({ data: [] })),
-          axios.get(`https://b.kardioclinic.uz/userscha/address-b?limit=1`).catch(() => ({ data: [] })),
-        ])
-
-        const today = new Date().toISOString().split("T")[0]
-        
-        const calculateTodayRegistrations = (data: any) => {
-          if (!data || !Array.isArray(data.users)) return 0
-          return data.users.filter((user: User) => 
-            user.createdAt && new Date(user.createdAt).toISOString().split("T")[0] === today
-          ).length
-        }
-
-        const stats = {
-          all: {
-            totalUsers: allRes.data?.total || 0,
-            todayRegistrations: calculateTodayRegistrations(allRes.data)
-          },
-          huzur: {
-            totalUsers: huzurRes.data?.total || 0,
-            todayRegistrations: calculateTodayRegistrations(huzurRes.data)
-          },
-          uygonish: {
-            totalUsers: uygonishRes.data?.total || 0,
-            todayRegistrations: calculateTodayRegistrations(uygonishRes.data)
-          }
-        }
-
-        statsCacheRef.current = {
-          data: stats,
-          timestamp: Date.now()
-        }
-
-        setCourseStats(stats)
-      } catch (fallbackError) {
-        console.error("Fallback statistikada xatolik:", fallbackError)
-      }
-    }
   }, [])
 
-  // Enhanced Excel export function - uses cached data
+  // Calculate statistics from all users
+  const calculateStats = useCallback((users: User[]) => {
+    const today = new Date().toISOString().split("T")[0]
+    
+    const allTotal = users.length
+    const allToday = users.filter((user) => 
+      user.createdAt && new Date(user.createdAt).toISOString().split("T")[0] === today
+    ).length
+
+    const huzurUsers = users.filter(u => u.address === "a")
+    const huzurTotal = huzurUsers.length
+    const huzurToday = huzurUsers.filter((user) => 
+      user.createdAt && new Date(user.createdAt).toISOString().split("T")[0] === today
+    ).length
+
+    const uygonishUsers = users.filter(u => u.address === "b")
+    const uygonishTotal = uygonishUsers.length
+    const uygonishToday = uygonishUsers.filter((user) => 
+      user.createdAt && new Date(user.createdAt).toISOString().split("T")[0] === today
+    ).length
+
+    setCourseStats({
+      all: { totalUsers: allTotal, todayRegistrations: allToday },
+      huzur: { totalUsers: huzurTotal, todayRegistrations: huzurToday },
+      uygonish: { totalUsers: uygonishTotal, todayRegistrations: uygonishToday },
+    })
+  }, [])
+
+  // Filter and search users locally
+  const filterUsers = useCallback(() => {
+    let filtered = [...allUsers]
+
+    // Filter by course
+    if (courseFilter !== "all") {
+      filtered = filtered.filter(user => user.address === courseFilter)
+    }
+
+    // Filter by search term
+    if (searchTerm.trim()) {
+      const searchLower = searchTerm.toLowerCase().trim()
+      filtered = filtered.filter(user => 
+        user.full_name.toLowerCase().includes(searchLower) ||
+        user.phone_number.includes(searchLower) ||
+        user.tg_user.toLowerCase().includes(searchLower)
+      )
+    }
+
+    setFilteredUsers(filtered)
+    setCurrentPage(1) // Reset to first page when filtering
+  }, [allUsers, courseFilter, searchTerm])
+
+  // Excel export function
   const downloadExcel = useCallback(async () => {
     try {
       setExportLoading(true)
 
-      // Get all cached users for current filter
-      let exportData: User[] = []
-      const cacheKeys = Array.from(cacheRef.current.keys())
-      
-      for (const key of cacheKeys) {
-        const cached = cacheRef.current.get(key)
-        if (cached && cached.courseFilter === courseFilter) {
-          exportData = [...exportData, ...cached.users]
-        }
-      }
-
-      // If no cache, fetch minimal data
-      if (exportData.length === 0) {
-        const params = new URLSearchParams()
-        if (courseFilter !== "all") {
-          params.append("address", courseFilter)
-        }
-        params.append("limit", "100") // Limit to 100 for export
-
-        const res = await axios.get(`https://b.kardioclinic.uz/userscha?${params.toString()}`, {
-          timeout: 10000,
-        })
-
-        if (res.data?.users) {
-          exportData = res.data.users
-        }
-      }
-
       // Prepare data for Excel
-      const excelData = exportData.map((user, index) => ({
+      const excelData = filteredUsers.map((user, index) => ({
         "№": index + 1,
         "To'liq ismi": user.full_name || "Kiritilmagan",
         "Telefon raqami": user.phone_number || "Kiritilmagan",
@@ -405,73 +201,38 @@ export default function Dashboard() {
       // Download file
       XLSX.writeFile(wb, filename)
 
-      // Show success message
-      alert(`Excel fayl muvaffaqiyatli yuklandi! (${exportData.length} ta foydalanuvchi)`)
+      alert(`Excel fayl muvaffaqiyatli yuklandi! (${excelData.length} ta foydalanuvchi)`)
     } catch (error) {
       console.error("Excel yuklashda xatolik:", error)
       alert("Excel faylni yuklashda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
     } finally {
       setExportLoading(false)
     }
-  }, [courseFilter])
-
-  const handlePageChange = useCallback((page: number) => {
-    setCurrentPage(page)
-    fetchUsers(page, searchTerm)
-    window.scrollTo({ top: 0, behavior: "smooth" })
-  }, [fetchUsers, searchTerm])
-
-  const handleSearch = useCallback(() => {
-    setCurrentPage(1)
-    fetchUsers(1, searchTerm)
-  }, [fetchUsers, searchTerm])
-
-  const handleSearchKeyPress = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      handleSearch()
-    }
-  }, [handleSearch])
+  }, [filteredUsers, courseFilter])
 
   // Handle course filter change
   const handleCourseFilterChange = useCallback((course: string) => {
     setCourseFilter(course)
-    setCurrentPage(1)
   }, [])
 
-  // Initial load - only once
+  // Initial load
   useEffect(() => {
-    fetchUsers(1)
-    fetchCourseStats()
+    fetchAllUsers()
+  }, [fetchAllUsers])
 
-    // Set up periodic refresh for stats only (every 10 minutes)
-    const statsInterval = setInterval(() => {
-      fetchCourseStats()
-    }, 10 * 60 * 1000)
-
-    return () => {
-      clearInterval(statsInterval)
-    }
-  }, [fetchUsers, fetchCourseStats])
-
-  // Handle course filter or items per page change
+  // Filter users when search or course filter changes
   useEffect(() => {
-    setCurrentPage(1)
-    fetchUsers(1, searchTerm)
-  }, [itemsPerPage, courseFilter, fetchUsers, searchTerm])
+    filterUsers()
+  }, [filterUsers])
 
-  // Calculate today's registrations from cached data
-  const todayRegistrations = useMemo(() => {
-    const today = new Date().toISOString().split("T")[0]
-    return users.filter((user) => {
-      if (courseFilter !== "all" && user.address !== courseFilter) return false
-      return user.createdAt && new Date(user.createdAt).toISOString().split("T")[0] === today
-    }).length
-  }, [users, courseFilter])
+  // Calculate pagination
+  const totalPages = Math.ceil(filteredUsers.length / itemsPerPage)
+  const startIndex = (currentPage - 1) * itemsPerPage
+  const endIndex = startIndex + itemsPerPage
+  const currentUsers = filteredUsers.slice(startIndex, endIndex)
 
-  // Memoized pagination render
+  // Pagination items
   const paginationItems = useMemo(() => {
-    const totalPages = pagination.totalPages
-    const currentPage = pagination.currentPage
     const pages: (number | string)[] = []
 
     if (totalPages > 0) {
@@ -499,12 +260,12 @@ export default function Dashboard() {
     }
 
     return pages
-  }, [pagination.totalPages, pagination.currentPage])
+  }, [totalPages, currentPage])
 
-  // Memoized table rows
+  // Table rows
   const tableRows = useMemo(() => {
-    return users.map((user, index) => {
-      const globalIndex = (pagination.currentPage - 1) * itemsPerPage + index + 1
+    return currentUsers.map((user, index) => {
+      const globalIndex = startIndex + index + 1
       const courseName = user.address === "a" ? "Huzur" : user.address === "b" ? "Uyg'onish" : "Kiritilmagan"
       const courseColor = user.address === "a" ? "bg-purple-100 text-purple-800" : 
                         user.address === "b" ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-800"
@@ -565,15 +326,7 @@ export default function Dashboard() {
         </tr>
       )
     })
-  }, [users, pagination.currentPage, itemsPerPage])
-
-  // Clear cache function (optional, for debugging)
-  const clearCache = useCallback(() => {
-    cacheRef.current.clear()
-    statsCacheRef.current = null
-    lastRequestRef.current = null
-    alert("Cache tozalandi!")
-  }, [])
+  }, [currentUsers, startIndex])
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 w-full">
@@ -581,7 +334,7 @@ export default function Dashboard() {
 
       <div className="w-full px-2 sm:px-4 lg:px-6 py-4 sm:py-8">
         <div className="bg-white rounded-xl sm:rounded-2xl shadow-2xl overflow-hidden border border-gray-100 w-full">
-          {/* Enhanced Header */}
+          {/* Header */}
           <div className="bg-gradient-to-r from-blue-600 via-purple-600 to-indigo-700 px-4 sm:px-6 py-6 sm:py-8 text-white">
             <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 sm:gap-6">
               <div>
@@ -740,18 +493,10 @@ export default function Dashboard() {
                   </>
                 )}
               </button>
-              
-              {/* Cache clear button (optional, for debugging) */}
-              <button
-                onClick={clearCache}
-                className="ml-4 bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all"
-                title="Cache tozalash"
-              >
-                Cache tozalash
-              </button>
             </div>
           </div>
 
+          {/* Search and Filters */}
           <div className="p-4 sm:p-6 border-b bg-gray-50">
             <div className="flex flex-col lg:flex-row gap-4 items-center justify-between">
               <div className="relative flex-1 max-w-md w-full">
@@ -772,41 +517,16 @@ export default function Dashboard() {
                 <input
                   type="text"
                   placeholder="Ism, telefon yoki kurs bo'yicha qidirish..."
-                  className="pl-10 pr-20 py-3 w-full rounded-xl border-2 border-gray-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm sm:text-base"
+                  className="pl-10 pr-10 py-3 w-full rounded-xl border-2 border-gray-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm sm:text-base"
                   value={searchTerm}
-                  onChange={(e) => {
-                    const value = e.target.value
-                    setSearchTerm(value)
-                  }}
-                  onKeyPress={handleSearchKeyPress}
+                  onChange={(e) => setSearchTerm(e.target.value)}
                 />
-                <button
-                  onClick={handleSearch}
-                  className="absolute inset-y-0 right-0 pr-3 flex items-center bg-blue-500 hover:bg-blue-600 text-white px-3 sm:px-4 rounded-r-xl transition-all"
-                >
-                  <svg
-                    className="h-4 w-4 sm:h-5 sm:w-5"
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                  >
-                    <path
-                      fillRule="evenodd"
-                      d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                </button>
                 {searchTerm && (
                   <button
-                    onClick={() => {
-                      setSearchTerm("")
-                      setCurrentPage(1)
-                      fetchUsers(1, "")
-                    }}
-                    className="absolute inset-y-0 right-12 sm:right-16 pr-2 flex items-center text-gray-400 hover:text-gray-600"
+                    onClick={() => setSearchTerm("")}
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600"
                   >
-                    <svg className="h-4 w-4 sm:h-5 sm:w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                     </svg>
                   </button>
@@ -818,7 +538,10 @@ export default function Dashboard() {
                   <label className="text-sm font-medium text-gray-700">Sahifada:</label>
                   <select
                     value={itemsPerPage}
-                    onChange={(e) => setItemsPerPage(Number(e.target.value))}
+                    onChange={(e) => {
+                      setItemsPerPage(Number(e.target.value))
+                      setCurrentPage(1)
+                    }}
                     className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-sm"
                   >
                     <option value={10}>10</option>
@@ -830,10 +553,10 @@ export default function Dashboard() {
 
                 <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-4 text-sm text-gray-600">
                   <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full font-medium">
-                    Sahifa: {pagination.currentPage} / {pagination.totalPages}
+                    Sahifa: {currentPage} / {totalPages}
                   </span>
                   <span className="bg-gray-100 text-gray-800 px-3 py-1 rounded-full font-medium">
-                    Jami: {pagination.totalUsers} ta
+                    Jami: {filteredUsers.length} ta
                   </span>
                   <span className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full font-medium">
                     {COURSE_NAMES[courseFilter as keyof typeof COURSE_NAMES]}
@@ -877,7 +600,7 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <button
-                  onClick={() => fetchUsers(currentPage, searchTerm)}
+                  onClick={fetchAllUsers}
                   className="mt-4 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all"
                 >
                   Qayta urinish
@@ -911,7 +634,7 @@ export default function Dashboard() {
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {users.length === 0 ? (
+                    {currentUsers.length === 0 ? (
                       <tr>
                         <td colSpan={6} className="px-3 sm:px-6 py-8 sm:py-12 text-center text-gray-500">
                           <div className="flex flex-col items-center">
@@ -947,24 +670,24 @@ export default function Dashboard() {
                 </table>
               </div>
 
-              {pagination.totalPages > 1 && (
+              {totalPages > 1 && (
                 <div className="bg-gray-50 px-4 sm:px-6 py-4 border-t border-gray-200">
                   <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
                     <div className="text-sm text-gray-700 text-center sm:text-left">
-                      <span className="font-medium">{(pagination.currentPage - 1) * itemsPerPage + 1}</span>
+                      <span className="font-medium">{startIndex + 1}</span>
                       {" - "}
                       <span className="font-medium">
-                        {Math.min(pagination.currentPage * itemsPerPage, pagination.totalUsers)}
+                        {Math.min(endIndex, filteredUsers.length)}
                       </span>
                       {" dan "}
-                      <span className="font-medium">{pagination.totalUsers}</span>
+                      <span className="font-medium">{filteredUsers.length}</span>
                       {" ta natija"}
                     </div>
 
                     <div className="flex items-center space-x-1 overflow-x-auto">
                       <button
-                        onClick={() => handlePageChange(pagination.currentPage - 1)}
-                        disabled={pagination.currentPage === 1}
+                        onClick={() => setCurrentPage(currentPage - 1)}
+                        disabled={currentPage === 1}
                         className="px-2 sm:px-3 py-2 text-xs sm:text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                       >
                         <span className="hidden sm:inline">← Oldingi</span>
@@ -974,10 +697,10 @@ export default function Dashboard() {
                       {paginationItems.map((page, index) => (
                         <button
                           key={index}
-                          onClick={() => (typeof page === "number" ? handlePageChange(page) : null)}
+                          onClick={() => typeof page === "number" && setCurrentPage(page)}
                           disabled={page === "..."}
                           className={`px-2 sm:px-3 py-2 text-xs sm:text-sm font-medium rounded-md transition-all ${
-                            page === pagination.currentPage
+                            page === currentPage
                               ? "bg-blue-600 text-white shadow-md"
                               : page === "..."
                                 ? "text-gray-400 cursor-default"
@@ -989,8 +712,8 @@ export default function Dashboard() {
                       ))}
 
                       <button
-                        onClick={() => handlePageChange(pagination.currentPage + 1)}
-                        disabled={pagination.currentPage === pagination.totalPages}
+                        onClick={() => setCurrentPage(currentPage + 1)}
+                        disabled={currentPage === totalPages}
                         className="px-2 sm:px-3 py-2 text-xs sm:text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                       >
                         <span className="hidden sm:inline">Keyingi →</span>
